@@ -125,6 +125,14 @@ class ComparePeriodsTests(unittest.TestCase):
         )
 
 
+class ReflectTests(unittest.TestCase):
+    def test_handle_reflect_returns_plan(self) -> None:
+        result = server._handle_reflect({"plan": "1. 查看停车收入\n2. 对比异常指标"})
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("查看停车收入", result["plan"])
+
+
 class MemoryInsightTests(unittest.TestCase):
     def test_save_insight_and_load_memory_context(self) -> None:
         original_base_dir = server.BASE_DIR
