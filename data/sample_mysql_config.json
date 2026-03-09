@@ -1,0 +1,8 @@
+{
+  "host": "127.0.0.1",
+  "port": 3306,
+  "user": "parking_user",
+  "password": "replace_me",
+  "database": "parking_ops",
+  "query": "SELECT parking_lot, total_revenue FROM parking_daily_stats LIMIT 10"
+}

@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智能数据分析 — Analytics Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500&family=IBM+Plex+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+/* ── Variables ─────────────────────────────────────────────────────── */
+:root {
+  --obsidian:    #07090f;
+  --surface-1:  #0d1118;
+  --surface-2:  #131923;
+  --surface-3:  #1a2232;
+  --border-dim: #1e2a3a;
+  --border-mid: #2a3a50;
+  --border-lit: #374d68;
+  --gold-deep:  #8a6820;
+  --gold-mid:   #b8922e;
+  --gold-bright:#d4aa4e;
+  --gold-pale:  #e8cc80;
+  --silver:     #6a7f98;
+  --silver-lit: #8fa4be;
+  --text-bright:#ede8e0;
+  --text-mid:   #a8b4c4;
+  --text-dim:   #586878;
+  --text-dimmer:#384050;
+  --crimson:    #c0392b;
+  --crimson-bg: rgba(192,57,43,.12);
+  --amber-bg:   rgba(184,146,46,.08);
+}
+
+/* ── Reset ──────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Body ───────────────────────────────────────────────────────────── */
+body {
+  font-family: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--obsidian);
+  color: var(--text-bright);
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Subtle dot-grid background */
+  background-image: radial-gradient(circle, rgba(180,160,100,.07) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+header {
+  background: linear-gradient(180deg, rgba(13,17,24,.98) 0%, rgba(13,17,24,.92) 100%);
+  border-bottom: 1px solid var(--border-dim);
+  padding: 0 28px;
+  flex-shrink: 0;
+  position: relative;
+  backdrop-filter: blur(12px);
+}
+
+/* gold rule at very top */
+header::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold-mid) 20%, var(--gold-bright) 50%, var(--gold-mid) 80%, transparent);
+}
+
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 58px;
+}
+
+.logotype {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.logo-mark {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+.logo-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.logo-primary {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-bright);
+  line-height: 1;
+}
+.logo-sub {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  font-weight: 300;
+  letter-spacing: 0.22em;
+  color: var(--gold-mid);
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.header-meta {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.session-tag {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-dimmer);
+  text-transform: uppercase;
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2ecc71;
+  box-shadow: 0 0 6px #2ecc71;
+  animation: pulse-dot 2.8s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%,100% { opacity: 1; }
+  50%      { opacity: .4; }
+}
+
+/* Source chips row */
+.header-bottom {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--border-dim);
+}
+.source-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--text-dimmer);
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding-right: 10px;
+  border-right: 1px solid var(--border-dim);
+}
+#source-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.chip {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  padding: 3px 10px;
+  border: 1px solid var(--border-mid);
+  color: var(--silver);
+  background: transparent;
+  cursor: default;
+  transition: all .2s;
+  clip-path: polygon(6px 0%, 100% 0%, calc(100% - 6px) 100%, 0% 100%);
+}
+.chip:hover {
+  border-color: var(--gold-deep);
+  color: var(--gold-pale);
+  background: var(--amber-bg);
+}
+
+/* ── Messages ───────────────────────────────────────────────────────── */
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 28px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  scroll-behavior: smooth;
+}
+
+/* Scrollbar */
+#messages::-webkit-scrollbar { width: 3px; }
+#messages::-webkit-scrollbar-track { background: transparent; }
+#messages::-webkit-scrollbar-thumb {
+  background: var(--border-mid);
+  border-radius: 2px;
+}
+
+/* ── Empty State ────────────────────────────────────────────────────── */
+.empty-state {
+  margin: auto;
+  text-align: center;
+  padding: 40px 20px;
+  animation: fade-up .6s ease both;
+}
+.empty-mark {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 20px;
+  opacity: .35;
+}
+.empty-headline {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--text-mid);
+  letter-spacing: .04em;
+  margin-bottom: 10px;
+}
+.empty-sub {
+  font-size: 13px;
+  font-weight: 300;
+  color: var(--text-dim);
+  line-height: 1.8;
+  max-width: 340px;
+  margin: 0 auto;
+}
+
+/* ── Message Rows ───────────────────────────────────────────────────── */
+.msg-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  animation: fade-up .28s ease both;
+}
+.msg-row.user { justify-content: flex-end; }
+.msg-row.ai   { justify-content: flex-start; }
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Avatars */
+.avatar {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+.ai .avatar {
+  background: linear-gradient(135deg, var(--gold-deep), var(--gold-mid));
+  border: 1px solid var(--gold-bright);
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+.user .avatar {
+  background: var(--surface-3);
+  border: 1px solid var(--border-mid);
+  border-radius: 2px;
+  order: 1; /* appears after bubble for user */
+}
+
+/* Bubble wrappers */
+.bubble-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(620px, 82vw);
+}
+
+/* Bubbles */
+.bubble {
+  padding: 12px 16px;
+  line-height: 1.7;
+  font-size: 13.5px;
+  font-weight: 300;
+  white-space: pre-wrap;
+  word-break: break-word;
+  position: relative;
+}
+.ai .bubble {
+  background: var(--surface-2);
+  border: 1px solid var(--border-mid);
+  border-radius: 0 8px 8px 8px;
+  color: var(--text-bright);
+}
+.ai .bubble::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--gold-deep), transparent 60%);
+}
+.user .bubble {
+  background: linear-gradient(135deg, var(--surface-3), var(--surface-2));
+  border: 1px solid var(--border-lit);
+  border-radius: 8px 0 8px 8px;
+  color: var(--text-bright);
+  text-align: right;
+}
+.user .bubble::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 40%, var(--gold-deep));
+}
+
+/* ── Loading Indicator ──────────────────────────────────────────────── */
+.loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: .1em;
+  color: var(--silver);
+  padding: 10px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  border-left: 2px solid var(--gold-mid);
+}
+.pulse-dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.pulse-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--gold-mid);
+  animation: dot-pulse 1.4s ease-in-out infinite;
+}
+.pulse-dots span:nth-child(2) { animation-delay: .2s; }
+.pulse-dots span:nth-child(3) { animation-delay: .4s; }
+@keyframes dot-pulse {
+  0%,80%,100% { opacity: .2; transform: scale(.7); }
+  40%          { opacity: 1;  transform: scale(1); }
+}
+
+/* ── Chart Container ────────────────────────────────────────────────── */
+.chart-container {
+  background: var(--surface-1);
+  border: 1px solid var(--border-mid);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  /* 突破气泡宽度限制，贴近消息区两侧留边 */
+  width: min(880px, calc(100vw - 80px));
+}
+.chart-container::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--gold-deep), var(--gold-bright) 50%, var(--gold-deep));
+}
+.chart-container svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.chart-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  letter-spacing: .16em;
+  color: var(--text-dimmer);
+  text-transform: uppercase;
+  padding: 6px 14px 4px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+/* ── Clarification hint ─────────────────────────────────────────────── */
+.clarify-hint {
+  padding: 10px 14px;
+  background: var(--amber-bg);
+  border: 1px solid var(--gold-deep);
+  border-radius: 4px;
+  border-left: 2px solid var(--gold-bright);
+  font-size: 13px;
+  font-weight: 300;
+  color: var(--gold-pale);
+  line-height: 1.6;
+}
+
+/* ── Error Bubble ───────────────────────────────────────────────────── */
+.error-bubble {
+  padding: 10px 14px;
+  background: var(--crimson-bg);
+  border: 1px solid rgba(192,57,43,.3);
+  border-left: 2px solid var(--crimson);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  color: #e07060;
+}
+
+/* ── Quick Prompts ──────────────────────────────────────────────────── */
+#quick-prompts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 28px 0;
+  flex-shrink: 0;
+}
+.quick-btn {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .1em;
+  padding: 5px 14px;
+  border: 1px solid var(--border-mid);
+  background: transparent;
+  color: var(--silver);
+  cursor: pointer;
+  transition: all .2s ease;
+  white-space: nowrap;
+  clip-path: polygon(8px 0%, 100% 0%, calc(100% - 8px) 100%, 0% 100%);
+}
+.quick-btn:hover:not(:disabled) {
+  border-color: var(--gold-mid);
+  color: var(--gold-pale);
+  background: var(--amber-bg);
+}
+.quick-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+/* ── Input Bar ──────────────────────────────────────────────────────── */
+#input-bar {
+  background: linear-gradient(0deg, rgba(7,9,15,.99) 0%, rgba(13,17,24,.95) 100%);
+  border-top: 1px solid var(--border-mid);
+  padding: 14px 28px 18px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-shrink: 0;
+  position: relative;
+}
+#input-bar::before {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold-deep) 30%, var(--gold-deep) 70%, transparent);
+  opacity: .5;
+}
+
+#user-input {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--border-mid);
+  border-radius: 4px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  font-weight: 300;
+  font-family: "IBM Plex Sans", "PingFang SC", sans-serif;
+  background: var(--surface-2);
+  color: var(--text-bright);
+  line-height: 1.6;
+  max-height: 120px;
+  min-height: 44px;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+  caret-color: var(--gold-bright);
+}
+#user-input::placeholder { color: var(--text-dimmer); }
+#user-input:focus {
+  border-color: var(--gold-mid);
+  box-shadow: 0 0 0 1px rgba(184,146,46,.15), 0 0 16px rgba(184,146,46,.06);
+}
+#user-input:disabled {
+  background: var(--surface-1);
+  color: var(--text-dim);
+  border-color: var(--border-dim);
+}
+
+#send-btn {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--gold-mid);
+  background: linear-gradient(135deg, var(--gold-deep), var(--gold-mid));
+  color: var(--obsidian);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all .2s ease;
+  border-radius: 2px;
+}
+#send-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--gold-mid), var(--gold-bright));
+  box-shadow: 0 0 20px rgba(184,146,46,.35);
+  transform: translateY(-1px);
+}
+#send-btn:disabled {
+  opacity: .3;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+#send-btn svg { pointer-events: none; }
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="header-top">
+    <div class="logotype">
+      <!-- Geometric hexagon logo mark -->
+      <svg class="logo-mark" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="17,2 31,9.5 31,24.5 17,32 3,24.5 3,9.5" fill="none" stroke="#b8922e" stroke-width="1"/>
+        <polygon points="17,7 26,12 26,22 17,27 8,22 8,12" fill="none" stroke="#8a6820" stroke-width=".5" opacity=".6"/>
+        <!-- inner chart bars -->
+        <rect x="10" y="19" width="3" height="6" fill="#b8922e" opacity=".5"/>
+        <rect x="15.5" y="14" width="3" height="11" fill="#d4aa4e" opacity=".7"/>
+        <rect x="21" y="10" width="3" height="15" fill="#b8922e" opacity=".5"/>
+        <!-- trend line -->
+        <polyline points="11.5,19 17,14 22.5,10" fill="none" stroke="#d4aa4e" stroke-width="1.2"/>
+        <circle cx="11.5" cy="19" r="1.2" fill="#d4aa4e"/>
+        <circle cx="17" cy="14" r="1.2" fill="#d4aa4e"/>
+        <circle cx="22.5" cy="10" r="1.2" fill="#d4aa4e"/>
+      </svg>
+      <div class="logo-text">
+        <span class="logo-primary">智能数据分析</span>
+        <span class="logo-sub">Analytics Intelligence</span>
+      </div>
+    </div>
+    <div class="header-meta">
+      <span class="session-tag" id="session-display">SESSION —</span>
+      <div class="status-dot" title="系统在线"></div>
+    </div>
+  </div>
+
+  <div class="header-bottom">
+    <span class="source-label">Data Sources</span>
+    <div id="source-chips">
+      <span class="chip">INITIALIZING</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── Messages ── -->
+<div id="messages">
+  <div class="empty-state" id="empty-state">
+    <!-- Geometric data icon -->
+    <svg class="empty-mark" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="4" width="56" height="56" rx="2" stroke="currentColor" stroke-width="1" opacity=".3"/>
+      <rect x="4" y="4" width="56" height="8" fill="currentColor" opacity=".08"/>
+      <line x1="4" y1="12" x2="60" y2="12" stroke="currentColor" stroke-width=".5" opacity=".3"/>
+      <rect x="12" y="36" width="6" height="16" fill="currentColor" opacity=".35"/>
+      <rect x="22" y="28" width="6" height="24" fill="currentColor" opacity=".5"/>
+      <rect x="32" y="20" width="6" height="32" fill="currentColor" opacity=".7"/>
+      <rect x="42" y="32" width="6" height="20" fill="currentColor" opacity=".4"/>
+      <polyline points="15,36 25,28 35,20 45,32" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".8"/>
+    </svg>
+    <div class="empty-headline">数据分析，从此对话即可</div>
+    <p class="empty-sub">我能帮你分析销售成交额、区域趋势，以及停车场收入、流量和异常诊断。<br>试着问："最近30天华东和华南的成交额趋势"</p>
+  </div>
+</div>
+
+<!-- ── Quick Prompts ── -->
+<div id="quick-prompts">
+  <button class="quick-btn" onclick="sendQuick('有哪些数据可以查？')">可用数据源</button>
+  <button class="quick-btn" onclick="sendQuick('最近30天华东和华南的成交额趋势')">成交额趋势</button>
+  <button class="quick-btn" onclick="sendQuick('最近7天哪个车场收入下滑最明显？')">车场收入分析</button>
+  <button class="quick-btn" onclick="sendQuick('对比上个月各区域销售情况')">区域销售对比</button>
+</div>
+
+<!-- ── Input Bar ── -->
+<div id="input-bar">
+  <textarea id="user-input" placeholder="输入分析问题，Enter 发送 · Shift+Enter 换行" rows="1"></textarea>
+  <button id="send-btn" title="发送">
+    <!-- Arrow right icon -->
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M3 9h12M10 4l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+</div>
+
+<script>
+// ── SVG Icons ──────────────────────────────────────────────────────────────
+const ICON_AI = `<svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <polygon points="7.5,1 13,4.25 13,10.75 7.5,14 2,10.75 2,4.25" fill="none" stroke="rgba(7,9,15,.9)" stroke-width="1"/>
+  <polyline points="4,10 6.5,6.5 8.5,8.5 11,4" fill="none" stroke="rgba(7,9,15,.9)" stroke-width="1.4"/>
+</svg>`;
+
+const ICON_USER = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="7" cy="4.5" r="2.5" stroke="#6a7f98" stroke-width="1.2"/>
+  <path d="M1 13c0-3.314 2.686-5 6-5s6 1.686 6 5" stroke="#6a7f98" stroke-width="1.2" stroke-linecap="round"/>
+</svg>`;
+
+// ── Session 管理 ──────────────────────────────────────────────────────────
+const sessionId = localStorage.getItem('sdq_session_id') || (() => {
+  const id = crypto.randomUUID();
+  localStorage.setItem('sdq_session_id', id);
+  return id;
+})();
+
+// 显示 session 缩略
+document.getElementById('session-display').textContent =
+  'SESSION — ' + sessionId.slice(0, 8).toUpperCase();
+
+// ── 加载数据源 chips ───────────────────────────────────────────────────────
+async function loadDataSources() {
+  try {
+    const res = await fetch('/api/data-sources');
+    const data = await res.json();
+    const chipsEl = document.getElementById('source-chips');
+    chipsEl.innerHTML = '';
+    for (const [name, info] of Object.entries(data)) {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = info.description;
+      chip.title = name;
+      chipsEl.appendChild(chip);
+    }
+  } catch (e) {
+    console.warn('数据源加载失败', e);
+  }
+}
+loadDataSources();
+
+// ── UI 工具函数 ────────────────────────────────────────────────────────────
+const messagesEl = document.getElementById('messages');
+let emptyStateEl = document.getElementById('empty-state');
+const userInput  = document.getElementById('user-input');
+const sendBtn    = document.getElementById('send-btn');
+
+function hideEmptyState() {
+  if (emptyStateEl) { emptyStateEl.remove(); emptyStateEl = null; }
+}
+
+function scrollToBottom() {
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function setInputEnabled(enabled) {
+  userInput.disabled = !enabled;
+  sendBtn.disabled   = !enabled;
+  document.querySelectorAll('.quick-btn').forEach(b => b.disabled = !enabled);
+}
+
+/* append a user message row */
+function appendUserBubble(text) {
+  hideEmptyState();
+  const row = document.createElement('div');
+  row.className = 'msg-row user';
+  row.innerHTML = `
+    <div class="bubble-wrapper">
+      <div class="bubble">${escapeHtml(text)}</div>
+    </div>
+    <div class="avatar">${ICON_USER}</div>
+  `;
+  messagesEl.appendChild(row);
+  scrollToBottom();
+}
+
+/* create AI row, return handles for streaming fill */
+function createAiBubble() {
+  hideEmptyState();
+  const row = document.createElement('div');
+  row.className = 'msg-row ai';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.innerHTML = ICON_AI;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'bubble-wrapper';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+
+  wrapper.appendChild(bubble);
+  row.appendChild(avatar);
+  row.appendChild(wrapper);
+  messagesEl.appendChild(row);
+  scrollToBottom();
+
+  return {
+    bubble,
+    appendExtra: (el) => { wrapper.appendChild(el); scrollToBottom(); },
+  };
+}
+
+function createLoadingIndicator(text = '正在查询数据') {
+  const el = document.createElement('div');
+  el.className = 'loading-indicator';
+  el.innerHTML = `
+    <div class="pulse-dots"><span></span><span></span><span></span></div>
+    <span>${text}</span>
+  `;
+  return el;
+}
+
+// ── SSE 聊天核心 ───────────────────────────────────────────────────────────
+let isProcessing = false;
+
+async function sendMessage(text) {
+  text = text.trim();
+  if (!text || isProcessing) return;
+
+  isProcessing = true;
+  setInputEnabled(false);
+
+  appendUserBubble(text);
+
+  const { bubble, appendExtra } = createAiBubble();
+  let loadingEl = null;
+  // 每次更新 loadingEl 时先把旧节点从 DOM 移除，防止多轮 tool_use 时残留
+  const setLoadingEl = (el) => { if (loadingEl) loadingEl.remove(); loadingEl = el; };
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, message: text }),
+    });
+
+    if (!response.ok) {
+      bubble.innerHTML = `<div class="error-bubble">请求失败：HTTP ${response.status}</div>`;
+      return;
+    }
+
+    const reader  = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let event;
+        try { event = JSON.parse(line.slice(6)); } catch { continue; }
+        handleSseEvent(event, bubble, appendExtra, setLoadingEl);
+      }
+    }
+  } catch (err) {
+    const errEl = document.createElement('div');
+    errEl.className = 'error-bubble';
+    errEl.textContent = `连接错误：${err.message}`;
+    appendExtra(errEl);
+  } finally {
+    if (loadingEl) loadingEl.remove();
+    isProcessing = false;
+    setInputEnabled(true);
+    userInput.focus();
+    scrollToBottom();
+  }
+}
+
+function handleSseEvent(event, bubble, appendExtra, setLoadingEl) {
+  switch (event.type) {
+    case 'text_delta':
+      bubble.textContent += event.content;
+      scrollToBottom();
+      break;
+
+    case 'tool_use': {
+      const label = event.tool_name === 'list_data_sources'
+        ? 'QUERYING DATA SOURCES'
+        : 'EXECUTING ANALYSIS';
+      const el = createLoadingIndicator(label);
+      appendExtra(el);
+      setLoadingEl(el);
+      break;
+    }
+
+    case 'tool_result': {
+      setLoadingEl(null);
+
+      if (event.chart_svg) {
+        const wrap = document.createElement('div');
+        wrap.className = 'chart-container';
+        wrap.innerHTML = `<div class="chart-label">Analysis Result · Chart</div>${event.chart_svg}`;
+        appendExtra(wrap);
+      }
+
+      if (event.needs_clarification && event.clarifying_question) {
+        const hint = document.createElement('div');
+        hint.className = 'clarify-hint';
+        hint.textContent = event.clarifying_question;
+        appendExtra(hint);
+      }
+
+      if (event.error) {
+        const errEl = document.createElement('div');
+        errEl.className = 'error-bubble';
+        errEl.textContent = `QUERY ERROR — ${event.error}`;
+        appendExtra(errEl);
+      }
+      break;
+    }
+
+    case 'error': {
+      const errEl = document.createElement('div');
+      errEl.className = 'error-bubble';
+      errEl.textContent = `SYSTEM ERROR — ${event.message}`;
+      appendExtra(errEl);
+      break;
+    }
+
+    case 'done': break;
+  }
+}
+
+// ── 输入框事件 ─────────────────────────────────────────────────────────────
+userInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    const v = userInput.value;
+    userInput.value = '';
+    userInput.style.height = 'auto';
+    sendMessage(v);
+  }
+});
+
+userInput.addEventListener('input', () => {
+  userInput.style.height = 'auto';
+  userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
+});
+
+sendBtn.addEventListener('click', () => {
+  const v = userInput.value;
+  userInput.value = '';
+  userInput.style.height = 'auto';
+  sendMessage(v);
+});
+
+function sendQuick(text) {
+  if (isProcessing) return;
+  sendMessage(text);
+}
+</script>
+</body>
+</html>

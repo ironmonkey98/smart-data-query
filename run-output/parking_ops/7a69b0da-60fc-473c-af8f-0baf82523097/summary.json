@@ -1,0 +1,106 @@
+{
+  "task": {
+    "intent": "parking_revenue_analysis",
+    "domain": "parking_ops",
+    "metric": {
+      "field": "total_revenue",
+      "label": "总收入",
+      "aggregation": "sum"
+    },
+    "entity_field": "parking_lot",
+    "time_field": "stat_date",
+    "time_granularity": "day",
+    "time_range": {
+      "preset": "last_7_days",
+      "start": "2026-03-03",
+      "end": "2026-03-09"
+    },
+    "comparison_range": {
+      "start": "2026-02-24",
+      "end": "2026-03-02"
+    },
+    "focus_metrics": [],
+    "chart": {
+      "type": "line",
+      "x_field": "stat_date",
+      "y_field": "总收入",
+      "series_field": "parking_lot"
+    },
+    "assumptions": [
+      "总收入按日汇总并按车场对比"
+    ],
+    "schema_hint": "# 数据结构说明",
+    "needs_clarification": false,
+    "clarifying_question": null
+  },
+  "analysis": {
+    "analysis_type": "revenue",
+    "primary_lot": "B停车场",
+    "revenue_delta": -1546.67,
+    "diagnosis": [
+      {
+        "factor": "payment_failure_rate",
+        "message": "支付失败率由 9.8% 上升到 11.8%",
+        "impact": "高"
+      },
+      {
+        "factor": "abnormal_open_count",
+        "message": "异常开闸 7 天累计增加 31 次",
+        "impact": "高"
+      },
+      {
+        "factor": "entry_count",
+        "message": "入场车次下降至前一周期的 81.1%",
+        "impact": "中"
+      },
+      {
+        "factor": "occupancy_rate",
+        "message": "平均利用率由 65.7% 下滑到 54.7%",
+        "impact": "中"
+      }
+    ],
+    "recommendations": [
+      "优先排查支付通道、二维码链路和出场缴费终端，降低支付失败造成的收入流失。",
+      "复核异常开闸权限和岗亭放行流程，重点检查高峰时段人工干预记录。",
+      "结合活动、价格和导流策略复盘车流下滑原因，评估是否需要调整时段优惠或流量投放。"
+    ],
+    "executive_summary": [
+      "B停车场 是最近一周期收入下滑最明显的车场，较窗口前半段日均减少 1547。",
+      "主要拖累因素集中在 payment_failure_rate、abnormal_open_count、entry_count、occupancy_rate。"
+    ]
+  },
+  "narrative": {
+    "mode": "rule",
+    "narrative": "B停车场 的收入下滑最明显，当前归因重点集中在 payment_failure_rate、abnormal_open_count、entry_count、occupancy_rate。",
+    "follow_up_suggestions": [
+      "为什么是这个车场？",
+      "支付失败和异常开闸分别影响多大？",
+      "下一步优先处理什么？"
+    ]
+  },
+  "executive_summary": [
+    "B停车场 是最近一周期收入下滑最明显的车场，较窗口前半段日均减少 1547。",
+    "主要拖累因素集中在 payment_failure_rate、abnormal_open_count、entry_count、occupancy_rate。"
+  ],
+  "artifacts": {
+    "summary": "/Users/yehong/smart-data-query 3/run-output/parking_ops/7a69b0da-60fc-473c-af8f-0baf82523097/summary.json",
+    "chart": "/Users/yehong/smart-data-query 3/run-output/parking_ops/7a69b0da-60fc-473c-af8f-0baf82523097/chart.svg"
+  },
+  "rows_sample": [
+    {
+      "stat_date": "2026-03-06",
+      "parking_lot": "B停车场",
+      "总收入": 6217
+    },
+    {
+      "stat_date": "2026-03-07",
+      "parking_lot": "B停车场",
+      "总收入": 5468
+    },
+    {
+      "stat_date": "2026-03-08",
+      "parking_lot": "B停车场",
+      "总收入": 5159
+    }
+  ]
+}

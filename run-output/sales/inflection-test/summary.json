@@ -1,0 +1,68 @@
+{
+  "task": {
+    "intent": "trend_compare",
+    "metric": {
+      "field": "paid_amount",
+      "label": "成交额",
+      "aggregation": "sum"
+    },
+    "dimensions": [
+      "region"
+    ],
+    "time_field": "order_date",
+    "time_granularity": "day",
+    "time_range": {
+      "preset": "last_30_days",
+      "start": "2026-01-06",
+      "end": "2026-02-04"
+    },
+    "filters": [
+      {
+        "field": "region",
+        "operator": "in",
+        "values": [
+          "华东",
+          "华南"
+        ]
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x_field": "order_date",
+      "y_field": "成交额",
+      "series_field": "region"
+    },
+    "sort": [
+      {
+        "field": "order_date",
+        "direction": "asc"
+      }
+    ],
+    "assumptions": [
+      "成交额按 paid_amount 汇总",
+      "区域范围限定为：华东、华南"
+    ],
+    "schema_hint": "# 数据结构说明"
+  },
+  "result": {
+    "row_count": 0,
+    "rows": [],
+    "metric": {
+      "field": "paid_amount",
+      "label": "成交额",
+      "aggregation": "sum"
+    },
+    "dimensions": [
+      "order_date",
+      "region"
+    ]
+  },
+  "artifacts": {
+    "summary": "/Users/yehong/smart-data-query 3/run-output/sales/inflection-test/summary.json",
+    "chart": "/Users/yehong/smart-data-query 3/run-output/sales/inflection-test/chart.svg"
+  },
+  "summary": [
+    "未查到符合条件的数据。"
+  ],
+  "rows_sample": []
+}
