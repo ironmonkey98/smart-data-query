@@ -344,6 +344,9 @@ async def chat(req: ChatRequest) -> StreamingResponse:
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+# 429 指数退避延迟（秒）：第1次等2s，第2次4s，第3次8s
+_RETRY_DELAYS = [2, 4, 8]
+
 
 # ─── SSE 流式核心：Tool Use 循环 ──────────────────────────────────────────────
 
@@ -376,55 +379,81 @@ async def _chat_stream(session_id: str, user_message: str) -> AsyncGenerator[str
 
     try:
         while tool_round <= max_tool_rounds:
-            with client.messages.stream(
-                model=model,
-                max_tokens=4096,
-                system=system,
-                tools=TOOLS,
-                messages=session.messages,
-            ) as stream:
-                tool_uses: list[dict] = []
 
-                for event in stream:
-                    if event.type == "content_block_start":
-                        if event.content_block.type == "tool_use":
-                            label_map = {
-                                "list_data_sources": "QUERYING DATA SOURCES",
-                                "execute_sql":       "EXECUTING SQL",
-                                "reflect":           "PLANNING ANALYSIS",
-                                "save_insight":      "SAVING INSIGHT",
-                            }
-                            yield _sse({
-                                "type":        "tool_use",
-                                "tool_name":   event.content_block.name,
-                                "tool_use_id": event.content_block.id,
-                                "label":       label_map.get(event.content_block.name, "PROCESSING"),
-                            })
-                            tool_uses.append({
-                                "type":  "tool_use",
-                                "id":    event.content_block.id,
-                                "name":  event.content_block.name,
-                                "input": {},
-                            })
-                        elif event.content_block.type == "text":
-                            pass  # 文字 block 开始，无需操作
+            # ── 带指数退避的 API 调用（处理 429 限流）────────────────────────
+            tool_uses: list[dict] = []
+            final_message = None
+            last_rate_exc: anthropic.RateLimitError | None = None
 
-                    elif event.type == "content_block_delta":
-                        if event.delta.type == "text_delta":
-                            yield _sse({"type": "text_delta", "content": event.delta.text})
-                        elif event.delta.type == "input_json_delta" and tool_uses:
-                            last = tool_uses[-1]
-                            last["_raw_input"] = last.get("_raw_input", "") + event.delta.partial_json
+            for attempt, wait_secs in enumerate([0] + _RETRY_DELAYS):
+                if wait_secs:
+                    yield _sse({
+                        "type":    "retrying",
+                        "wait":    wait_secs,
+                        "attempt": attempt,          # 第几次重试（1-based）
+                        "max":     len(_RETRY_DELAYS),
+                    })
+                    await asyncio.sleep(wait_secs)
 
-                    elif event.type == "content_block_stop":
-                        if tool_uses and "_raw_input" in tool_uses[-1]:
-                            last = tool_uses[-1]
-                            try:
-                                last["input"] = json.loads(last.pop("_raw_input"))
-                            except json.JSONDecodeError:
-                                last["input"] = {}
+                tool_uses = []
+                last_rate_exc = None
+                try:
+                    with client.messages.stream(
+                        model=model,
+                        max_tokens=4096,
+                        system=system,
+                        tools=TOOLS,
+                        messages=session.messages,
+                    ) as stream:
+                        for event in stream:
+                            if event.type == "content_block_start":
+                                if event.content_block.type == "tool_use":
+                                    label_map = {
+                                        "list_data_sources": "QUERYING DATA SOURCES",
+                                        "execute_sql":       "EXECUTING SQL",
+                                        "reflect":           "PLANNING ANALYSIS",
+                                        "save_insight":      "SAVING INSIGHT",
+                                    }
+                                    yield _sse({
+                                        "type":        "tool_use",
+                                        "tool_name":   event.content_block.name,
+                                        "tool_use_id": event.content_block.id,
+                                        "label":       label_map.get(event.content_block.name, "PROCESSING"),
+                                    })
+                                    tool_uses.append({
+                                        "type":  "tool_use",
+                                        "id":    event.content_block.id,
+                                        "name":  event.content_block.name,
+                                        "input": {},
+                                    })
+                                elif event.content_block.type == "text":
+                                    pass
 
-                final_message = stream.get_final_message()
+                            elif event.type == "content_block_delta":
+                                if event.delta.type == "text_delta":
+                                    yield _sse({"type": "text_delta", "content": event.delta.text})
+                                elif event.delta.type == "input_json_delta" and tool_uses:
+                                    last = tool_uses[-1]
+                                    last["_raw_input"] = last.get("_raw_input", "") + event.delta.partial_json
+
+                            elif event.type == "content_block_stop":
+                                if tool_uses and "_raw_input" in tool_uses[-1]:
+                                    last = tool_uses[-1]
+                                    try:
+                                        last["input"] = json.loads(last.pop("_raw_input"))
+                                    except json.JSONDecodeError:
+                                        last["input"] = {}
+
+                        final_message = stream.get_final_message()
+                    break  # API 调用成功，退出重试循环
+
+                except anthropic.RateLimitError as exc:
+                    last_rate_exc = exc
+                    # 还有重试次数则继续，否则在循环结束后抛出
+                    continue
+
+            if last_rate_exc is not None:
+                raise last_rate_exc  # 重试全部耗尽，向外层抛出
 
             # 记录 assistant 回复
             assistant_content = []

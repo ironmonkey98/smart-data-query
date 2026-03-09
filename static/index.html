@@ -1466,6 +1466,14 @@ function handleSseEvent(event, bubble, appendExtra, setLoadingEl, stepTimeline) 
       break;
     }
 
+    case 'retrying': {
+      setLoadingEl(null);
+      const el = createLoadingIndicator(`RATE LIMITED — 等待 ${event.wait}s 后重试 (${event.attempt}/${event.max})`);
+      appendExtra(el);
+      setLoadingEl(el);
+      break;
+    }
+
     case 'reflect': {
       setLoadingEl(null);
       const planEl = document.createElement('div');
