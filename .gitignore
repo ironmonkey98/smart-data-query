@@ -1,0 +1,19 @@
+# 环境变量（含密钥，禁止上传）
+.env
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 运行输出（自动生成，不需要版本控制）
+run-output/
+memory/
+
+# 虚拟环境
+venv/
+.venv/
