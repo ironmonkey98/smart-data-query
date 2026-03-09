@@ -908,6 +908,46 @@ body.report-mode #report-shell {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Reflect 计划块 ──────────────────────────────────────── */
+.reflect-plan {
+  border: 1px solid var(--border-mid);
+  border-left: 2px solid var(--silver-lit);
+  border-radius: 4px;
+  background: var(--surface-1);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.reflect-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  font-family: "IBM Plex Mono", monospace;
+  letter-spacing: .1em;
+  color: var(--silver);
+  border-bottom: 1px solid var(--border-dim);
+}
+.reflect-body {
+  padding: 10px 14px;
+  color: var(--text-mid);
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+.reflect-toggle {
+  margin-left: auto;
+  font-size: 10px;
+  background: none;
+  border: 1px solid var(--border-mid);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.reflect-toggle:hover {
+  border-color: var(--border-lit);
+  color: var(--text-mid);
+}
 </style>
 </head>
 <body>
@@ -1415,11 +1455,11 @@ function handleSseEvent(event, bubble, appendExtra, setLoadingEl, stepTimeline) 
     case 'tool_use': {
       const labelMap = {
         'list_data_sources': 'QUERYING DATA SOURCES',
-        'reflect': 'PLANNING ANALYSIS',
-        'compare_periods': 'COMPARING PERIODS',
-        'save_insight': 'SAVING INSIGHT',
+        'execute_sql':       'EXECUTING SQL',
+        'reflect':           'PLANNING ANALYSIS',
+        'save_insight':      'SAVING INSIGHT',
       };
-      const label = labelMap[event.tool_name] || 'EXECUTING ANALYSIS';
+      const label = event.label || labelMap[event.tool_name] || 'PROCESSING';
       const el = createLoadingIndicator(label);
       appendExtra(el);
       setLoadingEl(el);

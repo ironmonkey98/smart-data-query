@@ -171,7 +171,7 @@ def _load_sqlite(source: str, task: dict | None = None) -> list[dict]:
     if str(task.get("domain")) == "parking_ops" or str(task.get("intent", "")).startswith("parking_"):
         query_profile = task.get("query_profile") or "parking_daily_overview_join"
         if query_profile == "parking_daily_overview_join":
-            return _load_sqlite_parking_daily_rows(source)
+            return _filter_focus_entity_rows(_load_sqlite_parking_daily_rows(source), task)
         if query_profile == "payment_passage_reconciliation_by_date":
             return _load_sqlite_payment_passage_reconciliation_by_date(source, task)
         if query_profile == "payment_passage_reconciliation_by_plate":
@@ -300,7 +300,7 @@ def _load_sqlite_payment_passage_reconciliation_by_date(source: str, task: dict)
     WHERE 1=1 {date_clause} {mismatch_clause}
     ORDER BY dk.stat_date, pl.parking_lot_name
     """
-    return _execute_sqlite_query(source, query, params)
+    return _filter_focus_entity_rows(_execute_sqlite_query(source, query, params), task)
 
 
 def _load_sqlite_payment_passage_reconciliation_by_plate(source: str, task: dict) -> list[dict]:
@@ -364,7 +364,7 @@ def _load_sqlite_payment_passage_reconciliation_by_plate(source: str, task: dict
     WHERE 1=1 {date_clause} {extra_clause}
     ORDER BY keys.stat_date DESC, pl.parking_lot_name, keys.license_plate
     """
-    return _execute_sqlite_query(source, query, params)
+    return _filter_focus_entity_rows(_execute_sqlite_query(source, query, params), task)
 
 
 def _load_sqlite_lot_capacity_efficiency_ranking(source: str, task: dict) -> list[dict]:
@@ -402,7 +402,7 @@ def _load_sqlite_lot_capacity_efficiency_ranking(source: str, task: dict) -> lis
     LEFT JOIN passage_lot pas ON pas.lot_id = pl.lot_id
     ORDER BY revenue_per_space DESC, total_revenue DESC, pl.parking_lot_name
     """
-    return _execute_sqlite_query(source, query, params)
+    return _filter_focus_entity_rows(_execute_sqlite_query(source, query, params), task)
 
 
 def _load_sqlite_payment_method_risk_breakdown(source: str, task: dict) -> list[dict]:
@@ -434,7 +434,7 @@ def _load_sqlite_payment_method_risk_breakdown(source: str, task: dict) -> list[
     GROUP BY pl.parking_lot_name, pr.payment_method
     ORDER BY payment_failure_rate DESC, failure_count DESC, total_revenue DESC
     """
-    return _execute_sqlite_query(source, query, params)
+    return _filter_focus_entity_rows(_execute_sqlite_query(source, query, params), task)
 
 
 def _execute_sqlite_query(source: str, query: str, params: list | None = None) -> list[dict]:
@@ -443,6 +443,67 @@ def _execute_sqlite_query(source: str, query: str, params: list | None = None) -
             raw_rows = cursor.execute(query, params or []).fetchall()
             columns = [column[0] for column in cursor.description]
     return [{key: _coerce_scalar(value) for key, value in zip(columns, row)} for row in raw_rows]
+
+
+# ─── 通用 SQL 执行接口（供 Agent execute_sql 工具调用）───────────────────────
+
+def execute_raw_sql_on_sqlite(source_path: str, sql: str) -> list[dict]:
+    """对 SQLite 文件执行任意 SELECT，返回 list[dict]。"""
+    return _execute_sqlite_query(source_path, sql)
+
+
+def execute_raw_sql_on_csv(csv_path: str, sql: str, table_name: str = "sales") -> list[dict]:
+    """将 CSV 载入内存 SQLite，执行 SELECT SQL，返回 list[dict]。
+    table_name 即 SQL 中的表名，默认为 'sales'。
+    """
+    rows_raw = _load_csv(csv_path)
+    if not rows_raw:
+        return []
+
+    cols = list(rows_raw[0].keys())
+
+    # 按首行值推断 SQLite 列类型，确保数值运算正确
+    def _col_type(val) -> str:
+        if isinstance(val, bool):
+            return "INTEGER"
+        if isinstance(val, int):
+            return "INTEGER"
+        if isinstance(val, float):
+            return "REAL"
+        return "TEXT"
+
+    sample = rows_raw[0]
+    col_defs = ", ".join(f'"{col}" {_col_type(sample[col])}' for col in cols)
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute(f'CREATE TABLE "{table_name}" ({col_defs})')
+        conn.executemany(
+            f'INSERT INTO "{table_name}" VALUES ({", ".join(["?"] * len(cols))})',
+            [[row[col] for col in cols] for row in rows_raw],
+        )
+        conn.commit()
+        cursor = conn.execute(sql)
+        columns = [d[0] for d in cursor.description]
+        return [
+            {col: _coerce_scalar(val) for col, val in zip(columns, row)}
+            for row in cursor.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def _filter_focus_entity_rows(rows: list[dict], task: dict) -> list[dict]:
+    focus_entities = task.get("focus_entities") or []
+    if not focus_entities:
+        semantic_plan = task.get("semantic_plan") or {}
+        focus_entities = semantic_plan.get("focus_entities") or []
+    if not focus_entities:
+        return rows
+    allowed = {str(item).strip() for item in focus_entities if str(item).strip()}
+    if not allowed:
+        return rows
+    return [row for row in rows if str(row.get("parking_lot", "")).strip() in allowed]
 
 
 def _build_time_range_clause(task: dict, column: str) -> tuple[str, list]:
