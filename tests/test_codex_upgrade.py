@@ -6,6 +6,8 @@ from pathlib import Path
 
 import server
 from scripts import sql_generator
+from scripts.connect_db import load_dataset
+from scripts.parking_analyst import diagnose_parking_operation
 
 
 class DetectTimeRangeTests(unittest.TestCase):
@@ -72,17 +74,20 @@ class DetectTimeRangeTests(unittest.TestCase):
             glossary_text="glossary",
             planner=lambda *_args, **_kwargs: {
                 "domain": "parking_ops",
-                "intent": "parking_management_report",
-                "report_type": "weekly",
-                "time_range": {
+                "business_goal": "management_reporting",
+                "analysis_job": "operational_overview",
+                "decision_scope": "executive",
+                "deliverable": "web_report",
+                "time_scope": {
                     "preset": "last_7_days",
                     "start": "2026-03-03",
                     "end": "2026-03-09",
                 },
                 "focus_entities": ["A停车场"],
+                "focus_dimensions": ["parking_lot"],
                 "focus_metrics": ["total_revenue", "occupancy_rate"],
-                "needs_clarification": False,
-                "clarification_question": None,
+                "implicit_requirements": ["summary_first", "actionable_recommendations"],
+                "missing_information": [],
             },
         )
 
@@ -90,6 +95,8 @@ class DetectTimeRangeTests(unittest.TestCase):
         self.assertEqual(result["time_range"]["preset"], "last_7_days")
         self.assertEqual(result["focus_entities"], ["A停车场"])
         self.assertEqual(result["planner_mode"], "llm")
+        self.assertEqual(result["semantic_plan"]["business_goal"], "management_reporting")
+        self.assertEqual(result["semantic_plan"]["deliverable"], "web_report")
 
     def test_normalize_question_falls_back_to_rule_when_planner_result_is_invalid(self) -> None:
         result = sql_generator.normalize_question(
@@ -98,13 +105,69 @@ class DetectTimeRangeTests(unittest.TestCase):
             glossary_text="glossary",
             planner=lambda *_args, **_kwargs: {
                 "domain": "parking_ops",
-                "intent": "not_supported",
+                "business_goal": "unknown_goal",
             },
         )
 
         self.assertEqual(result["intent"], "parking_management_daily_report")
         self.assertEqual(result["time_range"]["preset"], "today")
         self.assertEqual(result["planner_mode"], "rule_fallback")
+
+    def test_normalize_question_maps_semantic_daily_brief_to_daily_report(self) -> None:
+        result = sql_generator.normalize_question(
+            "给老板看下今天经营情况",
+            schema_text="schema",
+            glossary_text="glossary",
+            planner=lambda *_args, **_kwargs: {
+                "domain": "parking_ops",
+                "business_goal": "management_reporting",
+                "analysis_job": "operational_overview",
+                "decision_scope": "executive",
+                "deliverable": "daily_brief",
+                "time_scope": {
+                    "preset": "today",
+                    "start": "2026-03-09",
+                    "end": "2026-03-09",
+                },
+                "focus_entities": [],
+                "focus_dimensions": ["parking_lot"],
+                "focus_metrics": ["total_revenue", "payment_failure_rate"],
+                "implicit_requirements": ["summary_first"],
+                "missing_information": [],
+            },
+        )
+
+        self.assertEqual(result["intent"], "parking_management_daily_report")
+        self.assertEqual(result["report_type"], "daily")
+        self.assertEqual(result["semantic_plan"]["deliverable"], "daily_brief")
+
+    def test_normalize_question_uses_missing_information_for_clarification(self) -> None:
+        result = sql_generator.normalize_question(
+            "生成停车经营报告，给管理层看",
+            schema_text="schema",
+            glossary_text="glossary",
+            planner=lambda *_args, **_kwargs: {
+                "domain": "parking_ops",
+                "business_goal": "management_reporting",
+                "analysis_job": "operational_overview",
+                "decision_scope": "executive",
+                "deliverable": "web_report",
+                "time_scope": {
+                    "preset": "all",
+                    "start": None,
+                    "end": None,
+                },
+                "focus_entities": [],
+                "focus_dimensions": ["parking_lot"],
+                "focus_metrics": ["total_revenue"],
+                "implicit_requirements": ["summary_first"],
+                "missing_information": ["time_scope"],
+            },
+        )
+
+        self.assertTrue(result["needs_clarification"])
+        self.assertIn("时间范围", result["clarifying_question"])
+        self.assertEqual(result["semantic_plan"]["missing_information"], ["time_scope"])
 
 
 class ComparePeriodsTests(unittest.TestCase):
@@ -131,6 +194,88 @@ class ReflectTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertIn("查看停车收入", result["plan"])
+
+
+class SemanticExecutionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.rows = load_dataset(
+            source="/Users/yehong/smart-data-query 3/data/sample_parking_ops.csv",
+            source_type="csv",
+        )
+
+    def test_semantic_plan_can_override_intent_to_daily_report(self) -> None:
+        task = {
+            "intent": "parking_management_report",
+            "domain": "parking_ops",
+            "entity_field": "parking_lot",
+            "time_field": "stat_date",
+            "time_range": {"preset": "today", "start": "2026-03-09", "end": "2026-03-09"},
+            "focus_metrics": ["total_revenue", "payment_failure_rate"],
+            "focus_entities": [],
+            "semantic_plan": {
+                "business_goal": "management_reporting",
+                "analysis_job": "operational_overview",
+                "decision_scope": "executive",
+                "deliverable": "daily_brief",
+                "focus_metrics": ["total_revenue", "payment_failure_rate"],
+                "focus_entities": [],
+            },
+        }
+
+        analysis = diagnose_parking_operation(self.rows, task)
+
+        self.assertEqual(analysis["analysis_type"], "management_report")
+        self.assertEqual(analysis["report_type"], "daily")
+
+    def test_semantic_plan_can_override_intent_to_anomaly_analysis(self) -> None:
+        task = {
+            "intent": "parking_management_report",
+            "domain": "parking_ops",
+            "entity_field": "parking_lot",
+            "time_field": "stat_date",
+            "time_range": {"preset": "last_7_days", "start": "2026-03-03", "end": "2026-03-09"},
+            "focus_metrics": ["payment_failure_rate"],
+            "focus_entities": [],
+            "semantic_plan": {
+                "business_goal": "risk_detection",
+                "analysis_job": "anomaly_focus",
+                "decision_scope": "operations",
+                "deliverable": None,
+                "focus_metrics": ["payment_failure_rate"],
+                "focus_entities": [],
+            },
+        }
+
+        analysis = diagnose_parking_operation(self.rows, task)
+
+        self.assertEqual(analysis["analysis_type"], "anomaly")
+        self.assertIn("风险", analysis["executive_summary"][1])
+
+    def test_management_report_prioritizes_anomaly_focus_from_semantic_plan(self) -> None:
+        task = {
+            "intent": "parking_management_report",
+            "domain": "parking_ops",
+            "entity_field": "parking_lot",
+            "time_field": "stat_date",
+            "time_range": {"preset": "last_7_days", "start": "2026-03-03", "end": "2026-03-09"},
+            "focus_metrics": ["payment_failure_rate", "abnormal_open_count"],
+            "focus_entities": [],
+            "semantic_plan": {
+                "business_goal": "management_reporting",
+                "analysis_job": "operational_overview",
+                "decision_scope": "executive",
+                "deliverable": "web_report",
+                "focus_metrics": ["payment_failure_rate", "abnormal_open_count"],
+                "focus_entities": [],
+            },
+        }
+
+        analysis = diagnose_parking_operation(self.rows, task)
+
+        self.assertEqual(analysis["analysis_type"], "management_report")
+        self.assertEqual(analysis["focus_lots"][0]["topic"], "经营异常")
+        self.assertIn("风险异常", analysis["executive_summary"][1])
 
 
 class MemoryInsightTests(unittest.TestCase):

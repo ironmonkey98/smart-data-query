@@ -5,17 +5,49 @@ from datetime import date, datetime, timedelta
 
 
 def diagnose_parking_operation(rows: list[dict], task: dict) -> dict:
-    if task["intent"] == "parking_revenue_analysis":
+    profile = _resolve_analysis_profile(task)
+    if profile == "revenue":
         return _analyze_revenue(rows, task)
-    if task["intent"] == "parking_anomaly_diagnosis":
+    if profile == "anomaly":
         return _analyze_anomaly(rows, task)
-    if task["intent"] == "parking_flow_efficiency_analysis":
+    if profile == "flow_efficiency":
         return _analyze_flow_efficiency(rows, task)
-    if task["intent"] == "parking_management_daily_report":
+    if profile == "management_daily":
         return _build_management_daily_report(rows, task)
-    if task["intent"] == "parking_management_report":
+    if profile == "management_weekly":
         return _build_management_report(rows, task)
     raise ValueError(f"不支持的停车经营分析意图: {task['intent']}")
+
+
+def _resolve_analysis_profile(task: dict) -> str:
+    semantic_plan = task.get("semantic_plan") or {}
+    business_goal = semantic_plan.get("business_goal")
+    analysis_job = semantic_plan.get("analysis_job")
+    deliverable = semantic_plan.get("deliverable")
+
+    if business_goal == "management_reporting" and analysis_job == "operational_overview":
+        if deliverable == "daily_brief":
+            return "management_daily"
+        return "management_weekly"
+    if business_goal == "risk_detection" and analysis_job == "anomaly_focus":
+        return "anomaly"
+    if business_goal == "efficiency_diagnosis" and analysis_job == "flow_or_occupancy":
+        return "flow_efficiency"
+    if business_goal == "revenue_diagnosis" and analysis_job == "revenue_focus":
+        return "revenue"
+
+    intent = task["intent"]
+    if intent == "parking_revenue_analysis":
+        return "revenue"
+    if intent == "parking_anomaly_diagnosis":
+        return "anomaly"
+    if intent == "parking_flow_efficiency_analysis":
+        return "flow_efficiency"
+    if intent == "parking_management_daily_report":
+        return "management_daily"
+    if intent == "parking_management_report":
+        return "management_weekly"
+    raise ValueError(f"不支持的停车经营分析意图: {intent}")
 
 
 def _analyze_revenue(rows: list[dict], task: dict) -> dict:
@@ -203,52 +235,66 @@ def _analyze_flow_efficiency(rows: list[dict], task: dict) -> dict:
 
 
 def _build_management_report(rows: list[dict], task: dict) -> dict:
-    revenue_report = _analyze_revenue(rows, {
-        **task,
-        "intent": "parking_revenue_analysis",
-        "metric": {"field": "total_revenue", "label": "总收入", "aggregation": "sum"},
-    })
-    anomaly_report = _analyze_anomaly(rows, {
-        **task,
-        "intent": "parking_anomaly_diagnosis",
-        "focus_metrics": ["payment_failure_rate", "abnormal_open_count", "free_release_count", "occupancy_rate"],
-    })
-    flow_report = _analyze_flow_efficiency(rows, {
-        **task,
-        "intent": "parking_flow_efficiency_analysis",
-        "focus_metrics": ["entry_count", "occupancy_rate"],
-    })
+    revenue_report = _analyze_revenue(rows, _build_child_task(
+        task,
+        intent="parking_revenue_analysis",
+        metric={"field": "total_revenue", "label": "总收入", "aggregation": "sum"},
+        focus_metrics=["total_revenue"],
+    ))
+    anomaly_report = _analyze_anomaly(rows, _build_child_task(
+        task,
+        intent="parking_anomaly_diagnosis",
+        focus_metrics=["payment_failure_rate", "abnormal_open_count", "free_release_count", "occupancy_rate"],
+    ))
+    flow_report = _analyze_flow_efficiency(rows, _build_child_task(
+        task,
+        intent="parking_flow_efficiency_analysis",
+        focus_metrics=["entry_count", "occupancy_rate"],
+    ))
 
     current_rows = _filter_range(rows, task["time_field"], task["time_range"])
     total_revenue = _sum(current_rows, "total_revenue")
     total_entry = _sum(current_rows, "entry_count")
     avg_occupancy = _avg(current_rows, "occupancy_rate")
 
-    focus_lots = [
+    revenue_focus = {
+        "parking_lot": revenue_report["primary_lot"],
+        "topic": "收入下滑",
+        "summary": revenue_report["executive_summary"][0],
+    }
+    flow_focus = {
+        "parking_lot": flow_report["primary_lot"],
+        "topic": "车流效率下滑",
+        "summary": flow_report["executive_summary"][0],
+    }
+    anomaly_focus_lots = [
         {
-            "parking_lot": revenue_report["primary_lot"],
-            "topic": "收入下滑",
-            "summary": revenue_report["executive_summary"][0],
-        },
-        {
-            "parking_lot": flow_report["primary_lot"],
-            "topic": "车流效率下滑",
-            "summary": flow_report["executive_summary"][0],
-        },
+            "parking_lot": item["parking_lot"],
+            "topic": "经营异常",
+            "summary": "；".join(item["reasons"]),
+        }
+        for item in anomaly_report["diagnosis"]
     ]
-    if anomaly_report["diagnosis"]:
-        focus_lots.extend([
-            {
-                "parking_lot": item["parking_lot"],
-                "topic": "经营异常",
-                "summary": "；".join(item["reasons"]),
-            }
-            for item in anomaly_report["diagnosis"]
-        ])
+
+    focus_lots = [
+        revenue_focus,
+        flow_focus,
+        *anomaly_focus_lots,
+    ]
+    focus_order = _resolve_management_focus_order(task)
+    focus_lots = _sort_focus_lots(focus_lots, focus_order)
 
     priority_actions = _dedupe_actions(
         revenue_report["recommendations"] + anomaly_report["recommendations"] + flow_report["recommendations"]
     )
+
+    summary_templates = {
+        "revenue": revenue_report["executive_summary"][0],
+        "anomaly": f"需优先处理 {anomaly_report['risk_level']} 风险异常，重点关注 {len(anomaly_report['diagnosis'])} 个异常车场。",
+        "flow_efficiency": flow_report["executive_summary"][0],
+    }
+    first_summary_key = focus_order[0]
+    second_summary_key = "anomaly" if first_summary_key != "anomaly" else "revenue"
 
     chart_rows = [{"stat_date": row["stat_date"], "parking_lot": row["parking_lot"], "总收入": row["total_revenue"]} for row in current_rows]
     return {
@@ -263,14 +309,10 @@ def _build_management_report(rows: list[dict], task: dict) -> dict:
         },
         "focus_lots": focus_lots,
         "priority_actions": priority_actions,
-        "modules": {
-            "revenue": revenue_report["executive_summary"],
-            "anomaly": anomaly_report["executive_summary"],
-            "flow_efficiency": flow_report["executive_summary"],
-        },
+        "modules": _build_management_modules(focus_order, revenue_report, anomaly_report, flow_report),
         "executive_summary": [
             f"最近周期总收入 {total_revenue:.0f}，总入场车次 {total_entry:.0f}，平均利用率 {avg_occupancy:.1%}。",
-            f"需重点关注 {revenue_report['primary_lot']} 的收入下滑，以及 {anomaly_report['risk_level']} 风险异常。",
+            summary_templates[second_summary_key] if first_summary_key == "revenue" else summary_templates[first_summary_key],
         ],
         "chart_rows": chart_rows,
         "chart_spec": {
@@ -555,3 +597,66 @@ def _build_daily_actions(current_by_lot: dict[str, list[dict]], previous_by_lot:
     if not actions:
         actions.append("继续监控今日高峰期经营指标，关注支付失败和利用率波动。")
     return actions
+
+
+def _build_child_task(task: dict, intent: str, focus_metrics: list[str], metric: dict | None = None) -> dict:
+    semantic_plan = dict(task.get("semantic_plan") or {})
+    if intent == "parking_revenue_analysis":
+        semantic_plan.update({"business_goal": "revenue_diagnosis", "analysis_job": "revenue_focus", "deliverable": None})
+    elif intent == "parking_anomaly_diagnosis":
+        semantic_plan.update({"business_goal": "risk_detection", "analysis_job": "anomaly_focus", "deliverable": None})
+    elif intent == "parking_flow_efficiency_analysis":
+        semantic_plan.update({"business_goal": "efficiency_diagnosis", "analysis_job": "flow_or_occupancy", "deliverable": None})
+    semantic_plan["focus_metrics"] = focus_metrics
+
+    child_task = {
+        **task,
+        "intent": intent,
+        "focus_metrics": focus_metrics,
+        "semantic_plan": semantic_plan,
+    }
+    if metric is not None:
+        child_task["metric"] = metric
+    return child_task
+
+
+def _resolve_management_focus_order(task: dict) -> list[str]:
+    focus_metrics = list(task.get("focus_metrics", []))
+    semantic_plan = task.get("semantic_plan") or {}
+    focus_metrics.extend(metric for metric in semantic_plan.get("focus_metrics", []) if metric not in focus_metrics)
+
+    anomaly_metrics = {"payment_failure_rate", "abnormal_open_count", "free_release_count"}
+    flow_metrics = {"entry_count", "occupancy_rate"}
+    revenue_metrics = {"total_revenue"}
+
+    if any(metric in anomaly_metrics for metric in focus_metrics):
+        return ["anomaly", "revenue", "flow_efficiency"]
+    if any(metric in flow_metrics for metric in focus_metrics):
+        return ["flow_efficiency", "revenue", "anomaly"]
+    if any(metric in revenue_metrics for metric in focus_metrics):
+        return ["revenue", "anomaly", "flow_efficiency"]
+    return ["revenue", "anomaly", "flow_efficiency"]
+
+
+def _sort_focus_lots(focus_lots: list[dict], focus_order: list[str]) -> list[dict]:
+    topic_to_category = {
+        "经营异常": "anomaly",
+        "收入下滑": "revenue",
+        "车流效率下滑": "flow_efficiency",
+    }
+    ranking = {category: index for index, category in enumerate(focus_order)}
+    return sorted(focus_lots, key=lambda item: ranking.get(topic_to_category.get(item["topic"], "revenue"), 99))
+
+
+def _build_management_modules(
+    focus_order: list[str],
+    revenue_report: dict,
+    anomaly_report: dict,
+    flow_report: dict,
+) -> dict:
+    module_map = {
+        "revenue": revenue_report["executive_summary"],
+        "anomaly": anomaly_report["executive_summary"],
+        "flow_efficiency": flow_report["executive_summary"],
+    }
+    return {key: module_map[key] for key in focus_order}

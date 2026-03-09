@@ -28,6 +28,12 @@ PARKING_INTENTS = {
     "parking_flow_efficiency_analysis",
     "parking_revenue_analysis",
 }
+SEMANTIC_BUSINESS_GOALS = {
+    "management_reporting",
+    "risk_detection",
+    "efficiency_diagnosis",
+    "revenue_diagnosis",
+}
 
 
 def normalize_question(
@@ -218,7 +224,7 @@ def _normalize_parking_question(
     llm_base_url: str | None = None,
     llm_model: str | None = None,
 ) -> dict:
-    planner_result = _plan_parking_question(
+    semantic_plan = _plan_parking_question(
         question=question,
         schema_text=schema_text,
         glossary_text=glossary_text,
@@ -226,25 +232,20 @@ def _normalize_parking_question(
         llm_base_url=llm_base_url,
         llm_model=llm_model,
     )
-    if planner_result is not None:
-        task = _build_parking_task(
+    if semantic_plan is not None:
+        task = _map_semantic_plan_to_task(
+            semantic_plan=semantic_plan,
             question=question,
             schema_text=schema_text,
             glossary_text=glossary_text,
-            intent=planner_result["intent"],
-            time_range=_coerce_parking_time_range(planner_result.get("time_range"), question, planner_result["intent"]),
-            focus_metrics=_coerce_focus_metrics(planner_result.get("focus_metrics"), planner_result["intent"], question),
-            focus_entities=_coerce_focus_entities(planner_result.get("focus_entities")),
         )
         task["planner_mode"] = "llm"
-        task["report_type"] = _resolve_report_type(task["intent"], planner_result.get("report_type"))
-        if planner_result.get("needs_clarification") is True:
-            task["needs_clarification"] = True
-            task["clarifying_question"] = planner_result.get("clarification_question") or task["clarifying_question"]
+        task["semantic_plan"] = semantic_plan
         return task
 
     task = _build_rule_parking_task(question, schema_text, glossary_text)
     task["planner_mode"] = "rule_fallback" if planner or os.getenv("OPENAI_API_KEY") else "rule"
+    task["semantic_plan"] = _build_rule_semantic_plan(question, task)
     return task
 
 
@@ -274,11 +275,129 @@ def _plan_parking_question(
         return None
     if not isinstance(plan, dict):
         return None
+    return _normalize_semantic_plan(plan)
+
+
+def _normalize_semantic_plan(plan: dict) -> dict | None:
     if plan.get("domain") not in {None, "", "parking_ops"}:
         return None
-    if plan.get("intent") not in PARKING_INTENTS:
+    if plan.get("business_goal") not in SEMANTIC_BUSINESS_GOALS:
         return None
-    return plan
+    if not isinstance(plan.get("focus_metrics"), list):
+        return None
+    normalized = {
+        "domain": "parking_ops",
+        "business_goal": plan["business_goal"],
+        "analysis_job": plan.get("analysis_job"),
+        "decision_scope": plan.get("decision_scope"),
+        "deliverable": plan.get("deliverable"),
+        "time_scope": _normalize_semantic_time_scope(plan.get("time_scope")),
+        "focus_entities": _coerce_focus_entities(plan.get("focus_entities")),
+        "focus_dimensions": _normalize_focus_dimensions(plan.get("focus_dimensions")),
+        "focus_metrics": [metric for metric in plan.get("focus_metrics", []) if isinstance(metric, str)],
+        "implicit_requirements": _normalize_string_list(plan.get("implicit_requirements")),
+        "missing_information": _normalize_string_list(plan.get("missing_information")),
+    }
+    return normalized
+
+
+def _normalize_semantic_time_scope(time_scope) -> dict:
+    if not isinstance(time_scope, dict):
+        return {"preset": "all", "start": None, "end": None}
+    preset = time_scope.get("preset") or "all"
+    start = time_scope.get("start")
+    end = time_scope.get("end")
+    return {"preset": preset, "start": start, "end": end}
+
+
+def _normalize_focus_dimensions(focus_dimensions) -> list[str]:
+    if not isinstance(focus_dimensions, list):
+        return ["parking_lot"]
+    cleaned = [item for item in focus_dimensions if isinstance(item, str) and item.strip()]
+    return cleaned or ["parking_lot"]
+
+
+def _normalize_string_list(values) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [value for value in values if isinstance(value, str) and value.strip()]
+
+
+def _map_semantic_plan_to_task(
+    semantic_plan: dict,
+    question: str,
+    schema_text: str,
+    glossary_text: str,
+) -> dict:
+    intent = _map_semantic_plan_to_intent(semantic_plan, question)
+    time_range = _coerce_parking_time_range(semantic_plan.get("time_scope"), question, intent)
+    focus_metrics = _coerce_focus_metrics(semantic_plan.get("focus_metrics"), intent, question)
+    task = _build_parking_task(
+        question=question,
+        schema_text=schema_text,
+        glossary_text=glossary_text,
+        intent=intent,
+        time_range=time_range,
+        focus_metrics=focus_metrics,
+        focus_entities=semantic_plan.get("focus_entities", []),
+    )
+    task["report_type"] = _resolve_report_type(intent, semantic_plan.get("deliverable"))
+    if "time_scope" in semantic_plan.get("missing_information", []):
+        task["needs_clarification"] = True
+        task["clarifying_question"] = "请先明确时间范围，例如最近7天、最近30天或本月。"
+    return task
+
+
+def _map_semantic_plan_to_intent(semantic_plan: dict, question: str) -> str:
+    business_goal = semantic_plan.get("business_goal")
+    analysis_job = semantic_plan.get("analysis_job")
+    decision_scope = semantic_plan.get("decision_scope")
+    deliverable = semantic_plan.get("deliverable")
+
+    if business_goal == "management_reporting" and analysis_job == "operational_overview" and decision_scope == "executive":
+        if deliverable == "daily_brief":
+            return "parking_management_daily_report"
+        return "parking_management_report"
+    if business_goal == "risk_detection" and analysis_job == "anomaly_focus":
+        return "parking_anomaly_diagnosis"
+    if business_goal == "efficiency_diagnosis" and analysis_job == "flow_or_occupancy":
+        return "parking_flow_efficiency_analysis"
+    if business_goal == "revenue_diagnosis" and analysis_job == "revenue_focus":
+        return "parking_revenue_analysis"
+    return _detect_intent(question)
+
+
+def _build_rule_semantic_plan(question: str, task: dict) -> dict:
+    intent = task["intent"]
+    business_goal, analysis_job, deliverable = _intent_to_semantic_defaults(intent)
+    missing_information = ["time_scope"] if task.get("needs_clarification") else []
+    return {
+        "domain": "parking_ops",
+        "business_goal": business_goal,
+        "analysis_job": analysis_job,
+        "decision_scope": "executive" if intent in {"parking_management_report", "parking_management_daily_report"} else "operations",
+        "deliverable": deliverable,
+        "time_scope": task["time_range"],
+        "focus_entities": task.get("focus_entities", []),
+        "focus_dimensions": ["parking_lot"],
+        "focus_metrics": task.get("focus_metrics", []),
+        "implicit_requirements": ["summary_first"] if intent in {"parking_management_report", "parking_management_daily_report"} else [],
+        "missing_information": missing_information,
+    }
+
+
+def _intent_to_semantic_defaults(intent: str) -> tuple[str, str, str | None]:
+    if intent == "parking_management_daily_report":
+        return "management_reporting", "operational_overview", "daily_brief"
+    if intent == "parking_management_report":
+        return "management_reporting", "operational_overview", "web_report"
+    if intent == "parking_anomaly_diagnosis":
+        return "risk_detection", "anomaly_focus", None
+    if intent == "parking_flow_efficiency_analysis":
+        return "efficiency_diagnosis", "flow_or_occupancy", None
+    if intent == "parking_revenue_analysis":
+        return "revenue_diagnosis", "revenue_focus", None
+    return "management_reporting", "operational_overview", None
 
 
 def _build_rule_parking_task(question: str, schema_text: str, glossary_text: str) -> dict:
@@ -413,6 +532,8 @@ def _resolve_report_type(intent: str, report_type: str | None) -> str | None:
     if intent == "parking_management_daily_report":
         return "daily"
     if intent == "parking_management_report":
+        if report_type == "daily_brief":
+            return "daily"
         return "weekly" if report_type not in {"daily", "weekly"} else report_type
     return None
 

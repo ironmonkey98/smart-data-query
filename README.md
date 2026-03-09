@@ -253,13 +253,14 @@ MySQL 已支持真实接入，但运行前需要本机安装 `pymysql` 或 `mysq
 ## 报表链路
 
 停车经营日报/周报当前链路如下：
-- 用户自然语言问题 → `scripts/sql_generator.py` 先调用 LLM Planner 做结构化拆解
-- LLM 结果经过 schema 校验与字段归一；失败时回退到最小规则解析
+- 用户自然语言问题 → `scripts/sql_generator.py` 先生成 `semantic_plan`
+- `semantic_plan` 经过 schema 校验与 mapping，转换成兼容现有执行层的 task；失败时回退到最小规则解析
 - `scripts/parking_analyst.py` 生成日报或周报结构化结果
 - `server.py` 持久化报表 payload，返回 `report_url`
 - 前端通过 `/api/report/{report_id}` 渲染独立管理层报表页
 
 说明：
 - 当前只覆盖停车经营域；销售域仍保持原有规则链路。
-- 停车经营 NLP 现为“LLM 主导 + 最小规则兜底”，术语表主要作为提示上下文，不再承担主要分支逻辑。
+- 停车经营 NLP 现为“第一性原则语义模型 + intent 兼容映射 + 最小规则兜底”。
+- task 里会保留 `semantic_plan`，执行层现已优先消费 `semantic_plan`，`intent` 只作为兼容 fallback。
 - `日报` 默认按“今天/今日”处理；在样例数据中若当天无数据，会回落到最近一个可用日期做演示。

@@ -45,9 +45,9 @@ Optional deps for MySQL: `pip install pymysql` or `pip install mysql-connector-p
 
 ```
 User question
-  → sql_generator.py: normalize_question()   # NL → task JSON (intent, metric, dimensions, filters, chart)
+  → sql_generator.py: normalize_question()   # NL → semantic_plan → compatible task JSON
   → connect_db.py: load_dataset()            # CSV or MySQL → list[dict]
-  → (parking intents) → parking_analyst.py  # 4 specialized analysis modes
+  → parking_analyst.py                       # semantic-first parking analysis dispatch
   → (other intents)  → connect_db.py: execute_structured_task()
   → llm_enhancer.py: enhance_analysis()     # optional LLM or rule-based narrative
   → chart_render.py: render_svg_chart()     # SVG line chart output
@@ -60,17 +60,40 @@ User question
 |------|------|
 | `main.py` | CLI entry point, argument parsing, task routing |
 | `scripts/smart_query.py` | Main orchestrator, coordinates all stages |
-| `scripts/sql_generator.py` | NL → structured task JSON using keyword matching + regex |
+| `scripts/sql_generator.py` | NL → semantic_plan → compatible task JSON |
 | `scripts/connect_db.py` | Unified data loader (CSV/MySQL) + generic query executor |
-| `scripts/parking_analyst.py` | Parking-specific diagnostics (revenue, anomaly, flow, weekly report) |
+| `scripts/parking_analyst.py` | Parking semantic-first diagnostics (revenue, anomaly, flow, daily/weekly report) |
 | `scripts/llm_enhancer.py` | Narrative generation — OpenAI-compatible API or rule engine |
 | `scripts/chart_render.py` | SVG line chart renderer (V1 only supports line charts) |
 | `references/db-schema.md` | Field definitions — required for query normalization |
 | `references/term-glossary.md` | Business term aliases (e.g., 成交额 → paid_amount) |
 
-### Normalized Task JSON Schema
+### Semantic Plan + Task Schema
 
-The central data contract between `sql_generator` and all downstream modules:
+`sql_generator.py` now works in two steps for parking questions:
+
+1. Build a first-principles `semantic_plan`
+2. Map that plan to a backward-compatible task for the executor
+
+`semantic_plan` (parking domain only):
+
+```json
+{
+  "domain": "parking_ops",
+  "business_goal": "management_reporting|risk_detection|efficiency_diagnosis|revenue_diagnosis",
+  "analysis_job": "operational_overview|anomaly_focus|flow_or_occupancy|revenue_focus",
+  "decision_scope": "executive|operations",
+  "deliverable": "web_report|daily_brief|null",
+  "time_scope": {"preset": "last_7_days", "start": "...", "end": "..."},
+  "focus_entities": ["A停车场"],
+  "focus_dimensions": ["parking_lot"],
+  "focus_metrics": ["total_revenue", "occupancy_rate"],
+  "implicit_requirements": ["summary_first"],
+  "missing_information": []
+}
+```
+
+Backward-compatible task contract:
 
 ```json
 {
@@ -83,12 +106,14 @@ The central data contract between `sql_generator` and all downstream modules:
   "filters": [{"field": "region", "operator": "in", "values": ["华东"]}],
   "chart": {"type": "line", "x_field": "order_date", "y_field": "成交额", "series_field": "region"},
   "assumptions": ["..."],
+  "semantic_plan": {"business_goal": "management_reporting"},
   "needs_clarification": false,
   "clarifying_question": null
 }
 ```
 
-Parking intents (`parking_*`) bypass the generic executor and go directly to `parking_analyst.py`.
+Parking tasks still bypass the generic executor and go directly to `parking_analyst.py`.
+The executor now prefers `semantic_plan` and only falls back to `intent` when semantic routing is missing or incomplete.
 
 ### Output Contract
 
@@ -101,7 +126,7 @@ When `needs_clarification: true`, the tool returns early with a clarifying quest
 ## V1 Boundaries (Known Limitations)
 
 - Chart rendering: **line charts only** — bar/pie/heatmap are future extensions
-- NL parsing: keyword matching + regex, not ML-based; complex multi-table reasoning is out of scope
+- NL parsing: parking domain uses semantic planning + mapping + rule fallback; other domains still use lighter rule parsing
 - Schema discovery: manual — `db-schema.md` and `term-glossary.md` must be maintained by hand
 - Excel data source: not yet implemented (planned extension per SKILL.md)
 
