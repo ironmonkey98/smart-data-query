@@ -15,6 +15,10 @@ run-output/
 memory/*
 !memory/.gitkeep
 
+# 本地大数据样本（保留在本机，不上传）
+data/sample_parking_ops.db
+data/5个停车场数据/
+
 # 虚拟环境
 venv/
 .venv/

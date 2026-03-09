@@ -175,6 +175,23 @@ header::before {
   color: var(--gold-pale);
   background: var(--amber-bg);
 }
+.chip-primary {
+  color: var(--gold-pale);
+  border-color: var(--gold-mid);
+  background: linear-gradient(180deg, rgba(184,146,46,.16), rgba(184,146,46,.08));
+}
+.chip-secondary {
+  color: var(--text-mid);
+  border-style: dashed;
+}
+.source-group-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--text-dimmer);
+  text-transform: uppercase;
+  margin-right: 2px;
+}
 
 /* ── Messages ───────────────────────────────────────────────────────── */
 #messages {
@@ -386,6 +403,62 @@ header::before {
   color: var(--gold-pale);
   line-height: 1.6;
 }
+.default-time-hint {
+  padding: 8px 14px;
+  background: rgba(106,127,152,.08);
+  border: 1px solid rgba(106,127,152,.2);
+  border-left: 2px solid var(--silver-lit);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 300;
+  color: var(--text-mid);
+  line-height: 1.6;
+}
+.step-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.step-card {
+  padding: 10px 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-dim);
+  border-left: 2px solid var(--border-mid);
+  border-radius: 4px;
+}
+.step-card.step-think { border-left-color: var(--silver-lit); }
+.step-card.step-act { border-left-color: var(--gold-mid); }
+.step-card.step-check { border-left-color: #3aa675; }
+.step-card.step-decide { border-left-color: #7a9cff; }
+.step-card.step-failed { border-left-color: var(--crimson); background: rgba(192,57,43,.08); }
+.step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .12em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.step-phase {
+  color: var(--gold-pale);
+}
+.step-status {
+  color: var(--text-dimmer);
+}
+.step-title {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-bright);
+}
+.step-detail {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-mid);
+}
 
 /* ── Error Bubble ───────────────────────────────────────────────────── */
 .error-bubble {
@@ -397,6 +470,15 @@ header::before {
   font-size: 12px;
   font-family: "IBM Plex Mono", monospace;
   color: #e07060;
+}
+.error-hint {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(224,112,96,.18);
+  font-family: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #f0beb6;
 }
 
 /* ── Quick Prompts ──────────────────────────────────────────────────── */
@@ -860,7 +942,7 @@ body.report-mode #report-shell {
   </div>
 
   <div class="header-bottom">
-    <span class="source-label">Data Sources</span>
+    <span class="source-label">分析域</span>
     <div id="source-chips">
       <span class="chip">INITIALIZING</span>
     </div>
@@ -882,7 +964,7 @@ body.report-mode #report-shell {
       <polyline points="15,36 25,28 35,20 45,32" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".8"/>
     </svg>
     <div class="empty-headline">数据分析，从此对话即可</div>
-    <p class="empty-sub">我能帮你分析销售成交额、区域趋势，以及停车场收入、流量和异常诊断。<br>试着问："最近30天华东和华南的成交额趋势"</p>
+    <p class="empty-sub">我会直接按停车经营口径帮你做收入、车流、利用率和异常诊断。<br>试着问："生成最近7天停车经营周报，给管理层看"</p>
   </div>
 </div>
 
@@ -890,15 +972,15 @@ body.report-mode #report-shell {
 <div id="report-shell"></div>
 
 <div id="quick-prompts" class="chat-only">
-  <button class="quick-btn" onclick="sendQuick('有哪些数据可以查？')">可用数据源</button>
-  <button class="quick-btn" onclick="sendQuick('最近30天华东和华南的成交额趋势')">成交额趋势</button>
+  <button class="quick-btn" onclick="sendQuick('生成最近7天停车经营周报，给管理层看')">管理层周报</button>
+  <button class="quick-btn" onclick="sendQuick('给老板看下今天经营情况')">管理层日报</button>
   <button class="quick-btn" onclick="sendQuick('最近7天哪个车场收入下滑最明显？')">车场收入分析</button>
-  <button class="quick-btn" onclick="sendQuick('对比上个月各区域销售情况')">区域销售对比</button>
+  <button class="quick-btn" onclick="sendQuick('哪个场子今天有问题')">异常车场排查</button>
 </div>
 
 <!-- ── Input Bar ── -->
 <div id="input-bar" class="chat-only">
-  <textarea id="user-input" placeholder="输入分析问题，Enter 发送 · Shift+Enter 换行" rows="1"></textarea>
+  <textarea id="user-input" placeholder="输入停车经营问题，例如：最近7天哪个车场收入下滑最明显，Enter 发送 · Shift+Enter 换行" rows="1"></textarea>
   <button id="send-btn" title="发送">
     <!-- Arrow right icon -->
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -939,13 +1021,31 @@ async function loadDataSources() {
     const data = await res.json();
     const chipsEl = document.getElementById('source-chips');
     chipsEl.innerHTML = '';
-    for (const [name, info] of Object.entries(data)) {
+    const orderedSources = [
+      ['parking_ops', data.parking_ops],
+      ...Object.entries(data).filter(([name]) => name !== 'parking_ops'),
+    ].filter(([, info]) => info);
+
+    const primaryLabel = document.createElement('span');
+    primaryLabel.className = 'source-group-label';
+    primaryLabel.textContent = '主分析域';
+    chipsEl.appendChild(primaryLabel);
+
+    orderedSources.forEach(([name, info], index) => {
+      if (index === 1) {
+        const secondaryLabel = document.createElement('span');
+        secondaryLabel.className = 'source-group-label';
+        secondaryLabel.textContent = '其他数据';
+        chipsEl.appendChild(secondaryLabel);
+      }
       const chip = document.createElement('span');
-      chip.className = 'chip';
-      chip.textContent = info.description;
+      chip.className = `chip ${index === 0 ? 'chip-primary' : 'chip-secondary'}`;
+      chip.textContent = index === 0
+        ? '停车经营分析 · 收入 / 车流 / 异常 / 管理层日报周报'
+        : '销售分析 · 次级入口';
       chip.title = name;
       chipsEl.appendChild(chip);
-    }
+    });
   } catch (e) {
     console.warn('数据源加载失败', e);
   }
@@ -1007,9 +1107,13 @@ function createAiBubble() {
   const wrapper = document.createElement('div');
   wrapper.className = 'bubble-wrapper';
 
+  const extras = document.createElement('div');
+  extras.className = 'bubble-extras';
+
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
 
+  wrapper.appendChild(extras);
   wrapper.appendChild(bubble);
   row.appendChild(avatar);
   row.appendChild(wrapper);
@@ -1018,7 +1122,7 @@ function createAiBubble() {
 
   return {
     bubble,
-    appendExtra: (el) => { wrapper.appendChild(el); scrollToBottom(); },
+    appendExtra: (el) => { extras.appendChild(el); scrollToBottom(); },
   };
 }
 
@@ -1030,6 +1134,28 @@ function createLoadingIndicator(text = '正在查询数据') {
     <span>${text}</span>
   `;
   return el;
+}
+
+function createStepTimeline() {
+  const el = document.createElement('div');
+  el.className = 'step-timeline';
+  return el;
+}
+
+function appendStepEvent(timelineEl, event) {
+  if (!timelineEl) return;
+  const card = document.createElement('div');
+  card.className = `step-card step-${event.phase || 'think'} ${event.status === 'failed' ? 'step-failed' : ''}`;
+  card.innerHTML = `
+    <div class="step-head">
+      <span class="step-phase">${escapeHtml(event.phase || 'step')}</span>
+      <span class="step-status">${escapeHtml(event.status || 'completed')}</span>
+    </div>
+    <div class="step-title">${escapeHtml(event.title || '执行步骤')}</div>
+    <div class="step-detail">${escapeHtml(event.detail || '')}</div>
+  `;
+  timelineEl.appendChild(card);
+  scrollToBottom();
 }
 
 function createReportLaunchCard(reportUrl) {
@@ -1225,6 +1351,8 @@ async function sendMessage(text) {
   appendUserBubble(text);
 
   const { bubble, appendExtra } = createAiBubble();
+  const stepTimeline = createStepTimeline();
+  appendExtra(stepTimeline);
   let loadingEl = null;
   // 每次更新 loadingEl 时先把旧节点从 DOM 移除，防止多轮 tool_use 时残留
   const setLoadingEl = (el) => { if (loadingEl) loadingEl.remove(); loadingEl = el; };
@@ -1256,7 +1384,7 @@ async function sendMessage(text) {
         if (!line.startsWith('data: ')) continue;
         let event;
         try { event = JSON.parse(line.slice(6)); } catch { continue; }
-        handleSseEvent(event, bubble, appendExtra, setLoadingEl);
+        handleSseEvent(event, bubble, appendExtra, setLoadingEl, stepTimeline);
       }
     }
   } catch (err) {
@@ -1273,11 +1401,15 @@ async function sendMessage(text) {
   }
 }
 
-function handleSseEvent(event, bubble, appendExtra, setLoadingEl) {
+function handleSseEvent(event, bubble, appendExtra, setLoadingEl, stepTimeline) {
   switch (event.type) {
     case 'text_delta':
       bubble.textContent += event.content;
       scrollToBottom();
+      break;
+
+    case 'step':
+      appendStepEvent(stepTimeline, event);
       break;
 
     case 'tool_use': {
@@ -1337,11 +1469,15 @@ function handleSseEvent(event, bubble, appendExtra, setLoadingEl) {
         appendExtra(hint);
       }
 
+      if (event.default_time_note) {
+        const hint = document.createElement('div');
+        hint.className = 'default-time-hint';
+        hint.textContent = event.default_time_note;
+        appendExtra(hint);
+      }
+
       if (event.error) {
-        const errEl = document.createElement('div');
-        errEl.className = 'error-bubble';
-        errEl.textContent = `QUERY ERROR — ${event.error}`;
-        appendExtra(errEl);
+        appendExtra(createErrorBubble('查询失败', event.error, event.error_hint));
       }
 
       if (event.report_url) {
@@ -1351,15 +1487,22 @@ function handleSseEvent(event, bubble, appendExtra, setLoadingEl) {
     }
 
     case 'error': {
-      const errEl = document.createElement('div');
-      errEl.className = 'error-bubble';
-      errEl.textContent = `SYSTEM ERROR — ${event.message}`;
-      appendExtra(errEl);
+      appendExtra(createErrorBubble('系统错误', event.message, event.error_hint));
       break;
     }
 
     case 'done': break;
   }
+}
+
+function createErrorBubble(title, message, hint) {
+  const errEl = document.createElement('div');
+  errEl.className = 'error-bubble';
+  errEl.innerHTML = `
+    <div>${escapeHtml(title)} — ${escapeHtml(message || '未知错误')}</div>
+    ${hint ? `<div class="error-hint">${escapeHtml(hint)}</div>` : ''}
+  `;
+  return errEl;
 }
 
 // ── 输入框事件 ─────────────────────────────────────────────────────────────

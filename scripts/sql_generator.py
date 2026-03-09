@@ -24,9 +24,11 @@ PARKING_OPERATION_KEYWORDS = ("经营", "情况", "表现", "异常", "有问题
 PARKING_INTENTS = {
     "parking_management_daily_report",
     "parking_management_report",
+    "parking_period_assessment",
     "parking_anomaly_diagnosis",
     "parking_flow_efficiency_analysis",
     "parking_revenue_analysis",
+    "parking_relational_query",
 }
 SEMANTIC_BUSINESS_GOALS = {
     "management_reporting",
@@ -103,13 +105,21 @@ def _detect_metric(question: str, glossary_text: str) -> tuple[str, str]:
 def _detect_intent(question: str) -> str:
     if _is_daily_management_report_question(question):
         return "parking_management_daily_report"
+    if any(token in question for token in ("收费流水", "通行记录", "联起来看", "联查", "打通", "车牌", "单位车位", "车位收入", "支付方式", "基础数据")):
+        return "parking_relational_query"
+    if any(token in question for token in ("经营盘子", "盘子", "捋一版", "整体情况", "综合看")) and _is_parking_question(question):
+        return "parking_management_report"
     if "车场" in question and any(keyword in question for keyword in ("周报", "日报", "管理层", "经营报告", "老板", "简报")):
         return "parking_management_report"
     if "停车" in question and any(keyword in question for keyword in ("周报", "日报", "管理层", "经营报告", "老板", "简报")):
         return "parking_management_report"
     if "场子" in question and any(keyword in question for keyword in ("老板", "简报")):
         return "parking_management_report"
-    if ("场子" in question or "停车" in question or "车场" in question) and ("有问题" in question or "异常" in question or "风险" in question):
+    if ("场子" in question or "停车" in question or "车场" in question) and (
+        "有问题" in question or "异常" in question or "风险" in question or "不正常" in question
+    ):
+        return "parking_anomaly_diagnosis"
+    if ("场子" in question or "车场" in question) and any(keyword in question for keyword in ("免费放行", "支付失败", "利用率", "最不正常")):
         return "parking_anomaly_diagnosis"
     if "车场" in question and ("车流" in question or "利用率" in question):
         return "parking_flow_efficiency_analysis"
@@ -117,6 +127,10 @@ def _detect_intent(question: str) -> str:
         return "parking_anomaly_diagnosis"
     if "车场" in question and ("收入" in question or "营收" in question):
         return "parking_revenue_analysis"
+    if _is_parking_question(question) and any(keyword in question for keyword in ("好转", "变坏")):
+        return "parking_period_assessment"
+    if _is_parking_question(question) and any(keyword in question for keyword in ("情况", "怎么样")):
+        return "parking_management_report"
     if "趋势" in question or "最近" in question:
         return "trend_compare"
     if "对比" in question:
@@ -130,6 +144,18 @@ def _detect_chart_type(question: str, intent: str) -> str:
 
 def _detect_time_range(question: str) -> dict:
     today = date.today()
+    relative_month_match = re.search(r"(今年|去年)\s*([1-9]|1[0-2])\s*月", question)
+    if relative_month_match:
+        target_year = today.year if relative_month_match.group(1) == "今年" else today.year - 1
+        target_month = int(relative_month_match.group(2))
+        month_start = date(target_year, target_month, 1)
+        month_end = _month_end(month_start)
+        preset = "this_year_month" if relative_month_match.group(1) == "今年" else "last_year_month"
+        return {
+            "preset": preset,
+            "start": month_start.isoformat(),
+            "end": month_end.isoformat(),
+        }
 
     if "今天" in question or "今日" in question:
         return {
@@ -205,6 +231,12 @@ def _detect_time_range(question: str) -> dict:
         }
 
     return {"preset": "all", "start": None, "end": None}
+
+
+def _month_end(month_start: date) -> date:
+    if month_start.month == 12:
+        return month_start.replace(day=31)
+    return month_start.replace(month=month_start.month + 1, day=1) - timedelta(days=1)
 
 
 def _build_assumptions(question: str, metric_label: str, regions: list[str]) -> list[str]:
@@ -292,9 +324,12 @@ def _normalize_semantic_plan(plan: dict) -> dict | None:
         "decision_scope": plan.get("decision_scope"),
         "deliverable": plan.get("deliverable"),
         "time_scope": _normalize_semantic_time_scope(plan.get("time_scope")),
+        "entities": _normalize_string_list(plan.get("entities")),
+        "relations": _normalize_string_list(plan.get("relations")),
         "focus_entities": _coerce_focus_entities(plan.get("focus_entities")),
         "focus_dimensions": _normalize_focus_dimensions(plan.get("focus_dimensions")),
         "focus_metrics": [metric for metric in plan.get("focus_metrics", []) if isinstance(metric, str)],
+        "constraints": _normalize_constraints(plan.get("constraints")),
         "implicit_requirements": _normalize_string_list(plan.get("implicit_requirements")),
         "missing_information": _normalize_string_list(plan.get("missing_information")),
     }
@@ -303,11 +338,14 @@ def _normalize_semantic_plan(plan: dict) -> dict | None:
 
 def _normalize_semantic_time_scope(time_scope) -> dict:
     if not isinstance(time_scope, dict):
-        return {"preset": "all", "start": None, "end": None}
-    preset = time_scope.get("preset") or "all"
+        return {"kind": "preset", "preset": "all", "anchor": None, "start": None, "end": None}
+    raw_preset = time_scope.get("preset")
+    kind = time_scope.get("kind") or ("preset" if raw_preset else "custom")
     start = time_scope.get("start")
     end = time_scope.get("end")
-    return {"preset": preset, "start": start, "end": end}
+    preset = raw_preset if raw_preset is not None else ("all" if not start and not end and kind == "preset" else None)
+    anchor = time_scope.get("anchor") if isinstance(time_scope.get("anchor"), dict) else None
+    return {"kind": kind, "preset": preset, "anchor": anchor, "start": start, "end": end}
 
 
 def _normalize_focus_dimensions(focus_dimensions) -> list[str]:
@@ -321,6 +359,16 @@ def _normalize_string_list(values) -> list[str]:
     if not isinstance(values, list):
         return []
     return [value for value in values if isinstance(value, str) and value.strip()]
+
+
+def _normalize_constraints(values) -> dict:
+    if not isinstance(values, dict):
+        return {}
+    return {
+        key: value
+        for key, value in values.items()
+        if isinstance(key, str) and key.strip()
+    }
 
 
 def _map_semantic_plan_to_task(
@@ -342,9 +390,15 @@ def _map_semantic_plan_to_task(
         focus_entities=semantic_plan.get("focus_entities", []),
     )
     task["report_type"] = _resolve_report_type(intent, semantic_plan.get("deliverable"))
-    if "time_scope" in semantic_plan.get("missing_information", []):
+    if "time_scope" in semantic_plan.get("missing_information", []) and _requires_explicit_time_range(question):
         task["needs_clarification"] = True
         task["clarifying_question"] = "请先明确时间范围，例如最近7天、最近30天或本月。"
+    task["entities"] = semantic_plan.get("entities", task.get("entities", []))
+    task["relations"] = semantic_plan.get("relations", task.get("relations", []))
+    task["constraints"] = {
+        **task.get("constraints", {}),
+        **semantic_plan.get("constraints", {}),
+    }
     return task
 
 
@@ -358,6 +412,8 @@ def _map_semantic_plan_to_intent(semantic_plan: dict, question: str) -> str:
         if deliverable == "daily_brief":
             return "parking_management_daily_report"
         return "parking_management_report"
+    if business_goal == "management_reporting" and analysis_job == "period_assessment":
+        return "parking_period_assessment"
     if business_goal == "risk_detection" and analysis_job == "anomaly_focus":
         return "parking_anomaly_diagnosis"
     if business_goal == "efficiency_diagnosis" and analysis_job == "flow_or_occupancy":
@@ -378,9 +434,12 @@ def _build_rule_semantic_plan(question: str, task: dict) -> dict:
         "decision_scope": "executive" if intent in {"parking_management_report", "parking_management_daily_report"} else "operations",
         "deliverable": deliverable,
         "time_scope": task["time_range"],
+        "entities": task.get("entities", []),
+        "relations": task.get("relations", []),
         "focus_entities": task.get("focus_entities", []),
         "focus_dimensions": ["parking_lot"],
         "focus_metrics": task.get("focus_metrics", []),
+        "constraints": task.get("constraints", {}),
         "implicit_requirements": ["summary_first"] if intent in {"parking_management_report", "parking_management_daily_report"} else [],
         "missing_information": missing_information,
     }
@@ -391,12 +450,16 @@ def _intent_to_semantic_defaults(intent: str) -> tuple[str, str, str | None]:
         return "management_reporting", "operational_overview", "daily_brief"
     if intent == "parking_management_report":
         return "management_reporting", "operational_overview", "web_report"
+    if intent == "parking_period_assessment":
+        return "management_reporting", "period_assessment", "summary"
     if intent == "parking_anomaly_diagnosis":
         return "risk_detection", "anomaly_focus", None
     if intent == "parking_flow_efficiency_analysis":
         return "efficiency_diagnosis", "flow_or_occupancy", None
     if intent == "parking_revenue_analysis":
         return "revenue_diagnosis", "revenue_focus", None
+    if intent == "parking_relational_query":
+        return "risk_detection", "relational_join", None
     return "management_reporting", "operational_overview", None
 
 
@@ -422,14 +485,23 @@ def _build_parking_task(
     focus_metrics: list[str],
     focus_entities: list[str],
 ) -> dict:
+    time_range, time_was_defaulted, time_default_reason = _finalize_parking_time_range(question, intent, time_range)
     if intent == "parking_management_daily_report" and time_range["preset"] == "all":
         today = date.today().isoformat()
         time_range = {"preset": "today", "start": today, "end": today}
 
     metric_field, metric_label = _resolve_parking_metric(intent, glossary_text)
+    query_profile = _resolve_parking_query_profile(question, intent, focus_metrics)
+    relations = _build_parking_relations(query_profile)
+    entities = _build_parking_entities(query_profile, focus_entities)
+    constraints = _build_parking_constraints(question, query_profile)
     task = {
         "intent": intent,
         "domain": "parking_ops",
+        "query_profile": query_profile,
+        "entities": entities,
+        "relations": relations,
+        "constraints": constraints,
         "metric": {
             "field": metric_field,
             "label": metric_label,
@@ -450,13 +522,17 @@ def _build_parking_task(
         },
         "assumptions": _build_parking_assumptions(question, metric_label, focus_metrics),
         "schema_hint": schema_text.strip().splitlines()[0] if schema_text.strip() else "",
+        "time_was_defaulted": time_was_defaulted,
+        "time_default_reason": time_default_reason,
     }
-    if time_range["preset"] == "all":
+    task["chart"] = _resolve_parking_chart(task["query_profile"], task["metric"]["label"])
+    if time_range["preset"] == "all" and _requires_explicit_time_range(question):
         task["needs_clarification"] = True
         task["clarifying_question"] = "请先明确时间范围，例如最近7天、最近30天或本月。"
     else:
         task["needs_clarification"] = False
         task["clarifying_question"] = None
+    _apply_parking_clarification_rules(question, task)
     task["report_type"] = _resolve_report_type(intent, None)
     return task
 
@@ -466,7 +542,9 @@ def _resolve_parking_metric(intent: str, glossary_text: str) -> tuple[str, str]:
         return "entry_count", "入场车次"
     if intent == "parking_anomaly_diagnosis":
         return "payment_failure_rate", "支付失败率"
-    if intent in {"parking_management_report", "parking_management_daily_report", "parking_revenue_analysis"}:
+    if intent == "parking_relational_query":
+        return "total_revenue", "总收入"
+    if intent in {"parking_management_report", "parking_management_daily_report", "parking_revenue_analysis", "parking_period_assessment"}:
         return "total_revenue", "总收入"
     return _detect_metric("", glossary_text)
 
@@ -487,7 +565,7 @@ def _detect_focus_metrics(question: str, intent: str) -> list[str]:
         return ["payment_failure_rate", "abnormal_open_count", "free_release_count", "occupancy_rate"]
     if not focus_metrics and intent == "parking_flow_efficiency_analysis":
         return ["entry_count", "occupancy_rate"]
-    if not focus_metrics and intent in {"parking_management_report", "parking_management_daily_report"}:
+    if not focus_metrics and intent in {"parking_management_report", "parking_management_daily_report", "parking_period_assessment"}:
         return ["total_revenue", "entry_count", "occupancy_rate", "payment_failure_rate", "abnormal_open_count"]
     return focus_metrics
 
@@ -500,6 +578,12 @@ def _coerce_focus_metrics(focus_metrics, intent: str, question: str) -> list[str
         "payment_failure_rate",
         "abnormal_open_count",
         "free_release_count",
+        "revenue_per_space",
+        "entry_per_space",
+        "payment_count",
+        "unmatched_payment_count",
+        "unmatched_passage_count",
+        "stay_minutes",
     }
     if isinstance(focus_metrics, list):
         cleaned = [item for item in focus_metrics if isinstance(item, str) and item in valid_metrics]
@@ -516,11 +600,19 @@ def _coerce_focus_entities(focus_entities) -> list[str]:
 
 def _coerce_parking_time_range(time_range, question: str, intent: str) -> dict:
     if isinstance(time_range, dict):
+        kind = time_range.get("kind")
         preset = time_range.get("preset")
+        anchor = time_range.get("anchor")
         start = time_range.get("start")
         end = time_range.get("end")
-        if preset and (preset == "all" or (start and end)):
-            return {"preset": preset, "start": start, "end": end}
+        if (preset or kind) and ((preset == "all") or (start and end)):
+            return {
+                "preset": preset or kind or "custom",
+                "kind": kind or ("preset" if preset else "custom"),
+                "anchor": anchor if isinstance(anchor, dict) else None,
+                "start": start,
+                "end": end,
+            }
     detected = _detect_time_range(question)
     if intent == "parking_management_daily_report" and detected["preset"] == "all":
         today = date.today().isoformat()
@@ -535,11 +627,39 @@ def _resolve_report_type(intent: str, report_type: str | None) -> str | None:
         if report_type == "daily_brief":
             return "daily"
         return "weekly" if report_type not in {"daily", "weekly"} else report_type
+    if intent == "parking_period_assessment":
+        return "summary"
     return None
+
+
+def _finalize_parking_time_range(question: str, intent: str, time_range: dict) -> tuple[dict, bool, str | None]:
+    if intent == "parking_management_daily_report" and time_range["preset"] == "all":
+        today = date.today().isoformat()
+        return {"preset": "today", "start": today, "end": today}, False, None
+    if time_range["preset"] != "all":
+        return time_range, False, None
+    if _requires_explicit_time_range(question):
+        return time_range, False, None
+    defaulted = {
+        "preset": "last_7_days",
+        "start": (date.today() - timedelta(days=6)).isoformat(),
+        "end": date.today().isoformat(),
+    }
+    return defaulted, True, "missing_time_scope"
+
+
+def _requires_explicit_time_range(question: str) -> bool:
+    explicit_period_tokens = ("本月", "上月", "上个月", "本周", "上周", "今天", "今日", "最近", "近", "今年")
+    if any(token in question for token in explicit_period_tokens):
+        return False
+    compare_tokens = ("环比", "同比", "对比")
+    return any(token in question for token in compare_tokens)
 
 
 def _is_parking_question(question: str) -> bool:
     if any(keyword in question for keyword in PARKING_DOMAIN_KEYWORDS):
+        return True
+    if any(keyword in question for keyword in ("收费流水", "通行记录", "车牌", "车位", "支付方式", "基础数据")):
         return True
     return any(keyword in question for keyword in MANAGEMENT_REPORT_KEYWORDS) and any(
         keyword in question for keyword in PARKING_OPERATION_KEYWORDS
@@ -552,6 +672,149 @@ def _is_daily_management_report_question(question: str) -> bool:
     return any(keyword in question for keyword in daily_keywords) and any(
         keyword in question for keyword in report_tone_keywords
     )
+
+
+def _resolve_parking_query_profile(question: str, intent: str, focus_metrics: list[str]) -> str:
+    if any(token in question for token in ("收费流水", "通行记录", "联起来看", "联查")) and any(
+        token in question for token in ("收入但没通行", "通行但没收入", "无通行", "无收入")
+    ):
+        return "payment_passage_reconciliation_by_date"
+    if "车牌" in question and any(token in question for token in ("打通", "联起来看", "联查", "收费", "通行")):
+        return "payment_passage_reconciliation_by_plate"
+    if any(token in question for token in ("单位车位", "车位收入", "基础数据", "总车位")):
+        return "lot_capacity_efficiency_ranking"
+    if "支付方式" in question or "缴费来源" in question:
+        return "payment_method_risk_breakdown"
+    if intent in {
+        "parking_management_daily_report",
+        "parking_management_report",
+        "parking_period_assessment",
+        "parking_revenue_analysis",
+        "parking_anomaly_diagnosis",
+        "parking_flow_efficiency_analysis",
+    }:
+        return "parking_daily_overview_join"
+    if any(metric in {"revenue_per_space", "entry_per_space"} for metric in focus_metrics):
+        return "lot_capacity_efficiency_ranking"
+    return "parking_daily_overview_join"
+
+
+def _build_parking_relations(query_profile: str) -> list[str]:
+    relation_map = {
+        "parking_daily_overview_join": [
+            "parking_payment_records->parking_lots",
+            "parking_passage_records->parking_lots",
+        ],
+        "payment_passage_reconciliation_by_date": [
+            "parking_payment_records->parking_lots",
+            "parking_passage_records->parking_lots",
+            "payment_daily<->passage_daily",
+        ],
+        "payment_passage_reconciliation_by_plate": [
+            "parking_payment_records->parking_passage_records by lot_id+license_plate+stat_date",
+        ],
+        "lot_capacity_efficiency_ranking": [
+            "parking_payment_records->parking_lots",
+            "parking_passage_records->parking_lots",
+        ],
+        "payment_method_risk_breakdown": [
+            "parking_payment_records->parking_lots",
+        ],
+    }
+    return relation_map.get(query_profile, [])
+
+
+def _build_parking_entities(query_profile: str, focus_entities: list[str]) -> list[str]:
+    base = list(focus_entities)
+    default_entities = {
+        "parking_daily_overview_join": ["parking_lot", "stat_date"],
+        "payment_passage_reconciliation_by_date": ["parking_lot", "stat_date"],
+        "payment_passage_reconciliation_by_plate": ["parking_lot", "license_plate", "stat_date"],
+        "lot_capacity_efficiency_ranking": ["parking_lot"],
+        "payment_method_risk_breakdown": ["parking_lot", "payment_method"],
+    }
+    for entity in default_entities.get(query_profile, []):
+        if entity not in base:
+            base.append(entity)
+    return base
+
+
+def _build_parking_constraints(question: str, query_profile: str) -> dict:
+    constraints = {}
+    if "有收入但没通行" in question or "无通行" in question:
+        constraints["mismatch_type"] = "payment_without_passage"
+    elif "有通行但没收入" in question or "无收入" in question:
+        constraints["mismatch_type"] = "passage_without_payment"
+
+    if "长时间停留" in question:
+        constraints["min_stay_minutes"] = 180
+    if "收费偏低" in question or "收费过低" in question:
+        constraints["needs_fee_definition"] = True
+    if "单位车位收入" in question or "车位收入" in question:
+        constraints["ranking_metric"] = "revenue_per_space"
+    elif "单位车位车流" in question:
+        constraints["ranking_metric"] = "entry_per_space"
+    if "支付方式" in question:
+        constraints["breakdown_dimension"] = "payment_method"
+    return constraints
+
+
+def _resolve_parking_chart(query_profile: str, metric_label: str) -> dict:
+    if query_profile == "lot_capacity_efficiency_ranking":
+        return {
+            "type": "bar",
+            "x_field": "parking_lot",
+            "y_field": "单位车位收入",
+            "series_field": None,
+        }
+    if query_profile == "payment_method_risk_breakdown":
+        return {
+            "type": "bar",
+            "x_field": "payment_method",
+            "y_field": "支付失败率",
+            "series_field": "parking_lot",
+        }
+    if query_profile == "payment_passage_reconciliation_by_date":
+        return {
+            "type": "bar",
+            "x_field": "stat_date",
+            "y_field": "总收入",
+            "series_field": "parking_lot",
+        }
+    if query_profile == "payment_passage_reconciliation_by_plate":
+        return {
+            "type": "bar",
+            "x_field": "license_plate",
+            "y_field": "停留时长",
+            "series_field": "parking_lot",
+        }
+    return {
+        "type": "line",
+        "x_field": "stat_date",
+        "y_field": metric_label,
+        "series_field": "parking_lot",
+    }
+
+
+def _apply_parking_clarification_rules(question: str, task: dict) -> None:
+    query_profile = task.get("query_profile")
+    constraints = task.get("constraints", {})
+    if query_profile == "payment_passage_reconciliation_by_plate" and constraints.get("needs_fee_definition"):
+        task["needs_clarification"] = True
+        task["clarifying_question"] = (
+            "“收费偏低”的口径不唯一。请明确是要看“有通行但未收费”、"
+            "“实收低于应收”，还是“按停留时长折算后收费偏低”。"
+        )
+        return
+    if query_profile == "payment_method_risk_breakdown" and "异常开闸" in question:
+        task["needs_clarification"] = True
+        task["clarifying_question"] = (
+            "当前原始表里没有异常开闸明细来源。"
+            "你可以改为查看“支付方式与支付失败率的关系”，或补充异常开闸明细表后再联查。"
+        )
+        return
+
+    task["needs_clarification"] = bool(task.get("needs_clarification"))
 
 
 def _build_comparison_range(time_range: dict) -> dict:

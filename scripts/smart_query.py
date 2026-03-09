@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
+from contextlib import closing
+from datetime import date as PathDate
+from datetime import timedelta as TimeDelta
 from pathlib import Path
 
 from chart_render import render_svg_chart
@@ -42,15 +46,21 @@ def run_query(
             "task": task,
             "needs_clarification": True,
             "clarifying_question": task["clarifying_question"],
+            "default_time_note": _build_default_time_note(task),
         }
         summary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         if session_file:
             _write_session(session_file, payload)
         return payload
 
-    rows = load_dataset(source=source, source_type=source_type)
+    if task["intent"].startswith("parking_") and source_type.lower() == "sqlite":
+        task = _align_parking_sqlite_time_range(task, source)
 
-    if task["intent"].startswith("parking_"):
+    rows = load_dataset(source=source, source_type=source_type, task=task)
+    if task["intent"].startswith("parking_") and task.get("query_profile") == "parking_daily_overview_join":
+        task = _align_parking_time_range(task, rows)
+
+    if task["intent"].startswith("parking_") and task.get("query_profile") == "parking_daily_overview_join":
         analysis = diagnose_parking_operation(rows, task)
         narrative = enhance_analysis(
             task=task,
@@ -83,6 +93,34 @@ def run_query(
             },
             # 供 Claude 做追问分析用的原始行样本（最多60行）
             "rows_sample": analysis.get("chart_rows", [])[:60],
+            "default_time_note": _build_default_time_note(task),
+        }
+    elif task["intent"].startswith("parking_"):
+        result = _build_parking_relational_result(task, rows)
+        try:
+            render_svg_chart(
+                rows=result["chart_rows"],
+                chart_spec=result["chart_spec"],
+                output_path=str(chart_path),
+                title="停车多表联查结果",
+            )
+        except NotImplementedError:
+            pass
+        payload = {
+            "task": task,
+            "result": {
+                "row_count": result["row_count"],
+                "rows": result["rows"],
+                "metric": task.get("metric"),
+                "dimensions": task.get("entities", []),
+            },
+            "artifacts": {
+                "summary": str(summary_path),
+                "chart": str(chart_path),
+            },
+            "summary": result["summary"],
+            "rows_sample": result["rows"][:60],
+            "default_time_note": _build_default_time_note(task),
         }
     else:
         result = execute_structured_task(rows=rows, task=task)
@@ -105,6 +143,7 @@ def run_query(
             "summary": build_summary(result),
             # 供 Claude 做追问分析用的原始行样本（最多60行）
             "rows_sample": result.get("rows", [])[:60],
+            "default_time_note": _build_default_time_note(task),
         }
     summary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     if session_file:
@@ -207,6 +246,246 @@ def _write_session(session_file: str, payload: dict) -> None:
 
 def _read_session(session_file: str) -> dict:
     return json.loads(Path(session_file).read_text(encoding="utf-8"))
+
+
+def _build_default_time_note(task: dict) -> str | None:
+    if not task.get("time_was_defaulted"):
+        return None
+    if task.get("time_range", {}).get("preset") == "last_7_days":
+        return "未指定时间范围，已按最近7天分析。"
+    return None
+
+
+def _build_parking_relational_result(task: dict, rows: list[dict]) -> dict:
+    query_profile = task.get("query_profile")
+    if query_profile == "payment_passage_reconciliation_by_date":
+        filtered = [row for row in rows if row.get("mismatch_type") != "matched"]
+        summary = _summarize_reconciliation_by_date(filtered, task)
+        return _build_relational_result_payload(
+            rows=filtered,
+            summary=summary,
+            chart_rows=[
+                {"stat_date": row["stat_date"], "parking_lot": row["parking_lot"], "总收入": row["total_revenue"]}
+                for row in filtered[:20]
+            ],
+            chart_spec={
+                "type": "bar",
+                "x_field": "stat_date",
+                "y_field": "总收入",
+                "series_field": "parking_lot",
+            },
+        )
+
+    if query_profile == "payment_passage_reconciliation_by_plate":
+        return _build_relational_result_payload(
+            rows=rows,
+            summary=_summarize_reconciliation_by_plate(rows),
+            chart_rows=[
+                {"license_plate": row["license_plate"], "parking_lot": row["parking_lot"], "停留时长": row["stay_minutes"]}
+                for row in rows[:20]
+            ],
+            chart_spec={
+                "type": "bar",
+                "x_field": "license_plate",
+                "y_field": "停留时长",
+                "series_field": "parking_lot",
+            },
+        )
+
+    if query_profile == "lot_capacity_efficiency_ranking":
+        return _build_relational_result_payload(
+            rows=rows,
+            summary=_summarize_capacity_ranking(rows, task),
+            chart_rows=[
+                {"parking_lot": row["parking_lot"], "单位车位收入": row["revenue_per_space"]}
+                for row in rows[:20]
+            ],
+            chart_spec={
+                "type": "bar",
+                "x_field": "parking_lot",
+                "y_field": "单位车位收入",
+                "series_field": None,
+            },
+        )
+
+    if query_profile == "payment_method_risk_breakdown":
+        return _build_relational_result_payload(
+            rows=rows,
+            summary=_summarize_payment_method_breakdown(rows),
+            chart_rows=[
+                {"payment_method": row["payment_method"], "parking_lot": row["parking_lot"], "支付失败率": row["payment_failure_rate"]}
+                for row in rows[:20]
+            ],
+            chart_spec={
+                "type": "bar",
+                "x_field": "payment_method",
+                "y_field": "支付失败率",
+                "series_field": "parking_lot",
+            },
+        )
+
+    return _build_relational_result_payload(
+        rows=rows,
+        summary=["当前联查结果已返回原始行，请进一步限定问题口径。"],
+        chart_rows=[],
+        chart_spec=task.get("chart", {}),
+    )
+
+
+def _build_relational_result_payload(rows: list[dict], summary: list[str], chart_rows: list[dict], chart_spec: dict) -> dict:
+    return {
+        "row_count": len(rows),
+        "rows": rows,
+        "summary": summary,
+        "chart_rows": chart_rows,
+        "chart_spec": chart_spec,
+    }
+
+
+def _summarize_reconciliation_by_date(rows: list[dict], task: dict) -> list[str]:
+    if not rows:
+        return ["当前时间窗口内未发现收费与通行不一致的日期。"]
+    mismatch_type = task.get("constraints", {}).get("mismatch_type")
+    top_row = max(rows, key=lambda row: float(row.get("total_revenue", 0) or 0))
+    if mismatch_type == "payment_without_passage":
+        return [
+            f"共识别到 {len(rows)} 条“有收入但无通行”日期记录。",
+            f"{top_row['parking_lot']} 在 {top_row['stat_date']} 的异常金额最高，收入 {top_row['total_revenue']:.0f}。",
+        ]
+    if mismatch_type == "passage_without_payment":
+        return [
+            f"共识别到 {len(rows)} 条“有通行但无收入”日期记录。",
+            f"{top_row['parking_lot']} 在 {top_row['stat_date']} 的对账缺口最值得优先排查。",
+        ]
+    return [
+        f"共识别到 {len(rows)} 条收费与通行不一致的日期记录。",
+        f"{top_row['parking_lot']} 在 {top_row['stat_date']} 的异常金额最高，收入 {top_row['total_revenue']:.0f}。",
+    ]
+
+
+def _summarize_reconciliation_by_plate(rows: list[dict]) -> list[str]:
+    if not rows:
+        return ["当前时间窗口内未发现满足条件的车牌联查记录。"]
+    top_row = max(rows, key=lambda row: float(row.get("stay_minutes", 0) or 0))
+    return [
+        f"共识别到 {len(rows)} 条车牌级联查记录。",
+        f"{top_row['parking_lot']} 的 {top_row['license_plate']} 停留 {top_row['stay_minutes']:.0f} 分钟，最值得优先复核收费口径。",
+    ]
+
+
+def _summarize_capacity_ranking(rows: list[dict], task: dict) -> list[str]:
+    if not rows:
+        return ["当前时间窗口内未生成单位车位效率结果。"]
+    metric = task.get("constraints", {}).get("ranking_metric", "revenue_per_space")
+    top_row = max(rows, key=lambda row: float(row.get(metric, 0) or 0))
+    if metric == "entry_per_space":
+        return [
+            f"{top_row['parking_lot']} 的单位车位车流最高，为 {top_row['entry_per_space']:.2f}。",
+            f"该车场总车位 {top_row['total_spaces']:.0f}，总入场车次 {top_row['entry_count']:.0f}。",
+        ]
+    return [
+        f"{top_row['parking_lot']} 的单位车位收入最高，为 {top_row['revenue_per_space']:.2f}。",
+        f"该车场总车位 {top_row['total_spaces']:.0f}，总收入 {top_row['total_revenue']:.0f}。",
+    ]
+
+
+def _summarize_payment_method_breakdown(rows: list[dict]) -> list[str]:
+    if not rows:
+        return ["当前时间窗口内未发现支付方式相关异常。"]
+    top_row = max(rows, key=lambda row: float(row.get("payment_failure_rate", 0) or 0))
+    return [
+        f"{top_row['parking_lot']} 的 {top_row['payment_method']} 支付失败率最高，为 {top_row['payment_failure_rate']:.1%}。",
+        f"该方式共发生 {top_row['payment_count']:.0f} 笔支付，其中失败 {top_row['failure_count']:.0f} 笔。",
+    ]
+
+
+def _align_parking_time_range(task: dict, rows: list[dict]) -> dict:
+    if not rows:
+        return task
+    time_range = dict(task.get("time_range") or {})
+    start_value = time_range.get("start")
+    end_value = time_range.get("end")
+    if not start_value or not end_value:
+        return task
+
+    latest_date = max(PathDate.fromisoformat(str(row["stat_date"])) for row in rows)
+    requested_end = PathDate.fromisoformat(str(end_value))
+    if requested_end <= latest_date:
+        return task
+
+    if time_range.get("preset") == "today":
+        shifted_range = {
+            **time_range,
+            "start": latest_date.isoformat(),
+            "end": latest_date.isoformat(),
+        }
+    else:
+        requested_start = PathDate.fromisoformat(str(start_value))
+        window_days = max((requested_end - requested_start).days, 0)
+        shifted_range = {
+            **time_range,
+            "start": (latest_date - TimeDelta(days=window_days)).isoformat(),
+            "end": latest_date.isoformat(),
+        }
+
+    assumptions = list(task.get("assumptions", []))
+    assumptions.append(f"数据最新日期为 {latest_date.isoformat()}，已将相对时间窗口对齐到最新可用数据。")
+    return {
+        **task,
+        "time_range": shifted_range,
+        "assumptions": assumptions,
+    }
+
+
+def _align_parking_sqlite_time_range(task: dict, source: str) -> dict:
+    time_range = dict(task.get("time_range") or {})
+    start_value = time_range.get("start")
+    end_value = time_range.get("end")
+    if not start_value or not end_value:
+        return task
+
+    latest_date = _get_latest_parking_sqlite_date(source)
+    requested_end = PathDate.fromisoformat(str(end_value))
+    if requested_end <= latest_date:
+        return task
+
+    if time_range.get("preset") == "today":
+        shifted_range = {
+            **time_range,
+            "start": latest_date.isoformat(),
+            "end": latest_date.isoformat(),
+        }
+    else:
+        requested_start = PathDate.fromisoformat(str(start_value))
+        window_days = max((requested_end - requested_start).days, 0)
+        shifted_range = {
+            **time_range,
+            "start": (latest_date - TimeDelta(days=window_days)).isoformat(),
+            "end": latest_date.isoformat(),
+        }
+
+    assumptions = list(task.get("assumptions", []))
+    assumptions.append(f"数据最新日期为 {latest_date.isoformat()}，已将相对时间窗口对齐到最新可用数据。")
+    return {
+        **task,
+        "time_range": shifted_range,
+        "assumptions": assumptions,
+    }
+
+
+def _get_latest_parking_sqlite_date(source: str) -> PathDate:
+    query = """
+    SELECT MAX(stat_date) FROM (
+        SELECT date(paid_at) AS stat_date FROM parking_payment_records WHERE paid_at IS NOT NULL
+        UNION ALL
+        SELECT date(entry_at) AS stat_date FROM parking_passage_records WHERE entry_at IS NOT NULL
+    )
+    """
+    with closing(sqlite3.connect(source)) as connection:
+        latest_value = connection.execute(query).fetchone()[0]
+    if not latest_value:
+        raise ValueError("停车经营 SQLite 数据源中没有可用日期。")
+    return PathDate.fromisoformat(str(latest_value))
 
 
 if __name__ == "__main__":

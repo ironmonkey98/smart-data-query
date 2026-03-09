@@ -8,6 +8,8 @@ def diagnose_parking_operation(rows: list[dict], task: dict) -> dict:
     profile = _resolve_analysis_profile(task)
     if profile == "revenue":
         return _analyze_revenue(rows, task)
+    if profile == "period_assessment":
+        return _build_period_assessment(rows, task)
     if profile == "anomaly":
         return _analyze_anomaly(rows, task)
     if profile == "flow_efficiency":
@@ -29,6 +31,8 @@ def _resolve_analysis_profile(task: dict) -> str:
         if deliverable == "daily_brief":
             return "management_daily"
         return "management_weekly"
+    if business_goal == "management_reporting" and analysis_job == "period_assessment":
+        return "period_assessment"
     if business_goal == "risk_detection" and analysis_job == "anomaly_focus":
         return "anomaly"
     if business_goal == "efficiency_diagnosis" and analysis_job == "flow_or_occupancy":
@@ -39,6 +43,8 @@ def _resolve_analysis_profile(task: dict) -> str:
     intent = task["intent"]
     if intent == "parking_revenue_analysis":
         return "revenue"
+    if intent == "parking_period_assessment":
+        return "period_assessment"
     if intent == "parking_anomaly_diagnosis":
         return "anomaly"
     if intent == "parking_flow_efficiency_analysis":
@@ -109,6 +115,9 @@ def _analyze_revenue(rows: list[dict], task: dict) -> dict:
         "chart_rows": chart_rows,
         "chart_spec": {
             "type": "line",
+            "chart_family": "trend",
+            "style_preset": "ops_dense",
+            "tone": "operations",
             "x_field": "stat_date",
             "y_field": "总收入",
             "series_field": "parking_lot",
@@ -149,9 +158,11 @@ def _analyze_anomaly(rows: list[dict], task: dict) -> dict:
 
     recommendations = _build_anomaly_recommendations(diagnosis)
     chart_rows = [
-        {"stat_date": row["stat_date"], "parking_lot": row["parking_lot"], "支付失败率": row["payment_failure_rate"]}
-        for row in current_rows
-        if any(item["parking_lot"] == row["parking_lot"] for item in diagnosis)
+        {
+            "parking_lot": item["parking_lot"],
+            "风险分": _risk_level_to_score(item["risk_level"]),
+        }
+        for item in diagnosis
     ]
     return {
         "analysis_type": "anomaly",
@@ -164,10 +175,14 @@ def _analyze_anomaly(rows: list[dict], task: dict) -> dict:
         ],
         "chart_rows": chart_rows,
         "chart_spec": {
-            "type": "line",
-            "x_field": "stat_date",
-            "y_field": "支付失败率",
-            "series_field": "parking_lot",
+            "type": "bar",
+            "chart_family": "risk_overview",
+            "style_preset": "executive_risk",
+            "tone": "executive",
+            "x_field": "parking_lot",
+            "y_field": "风险分",
+            "series_field": None,
+            "emphasis": [item["parking_lot"] for item in diagnosis if item["risk_level"] == highest_risk],
         },
     }
 
@@ -227,6 +242,9 @@ def _analyze_flow_efficiency(rows: list[dict], task: dict) -> dict:
         "chart_rows": chart_rows,
         "chart_spec": {
             "type": "line",
+            "chart_family": "trend",
+            "style_preset": "ops_dense",
+            "tone": "operations",
             "x_field": "stat_date",
             "y_field": "利用率",
             "series_field": "parking_lot",
@@ -253,9 +271,18 @@ def _build_management_report(rows: list[dict], task: dict) -> dict:
     ))
 
     current_rows = _filter_range(rows, task["time_field"], task["time_range"])
+    previous_rows = _filter_comparison_range(rows, task["time_field"], task.get("comparison_range"))
     total_revenue = _sum(current_rows, "total_revenue")
     total_entry = _sum(current_rows, "entry_count")
     avg_occupancy = _avg(current_rows, "occupancy_rate")
+    comparison_summary = _build_management_comparison_summary(
+        current_rows=current_rows,
+        previous_rows=previous_rows,
+        current_total_revenue=total_revenue,
+        current_total_entry=total_entry,
+        current_avg_occupancy=avg_occupancy,
+        current_risk_count=len(anomaly_report["diagnosis"]),
+    )
 
     revenue_focus = {
         "parking_lot": revenue_report["primary_lot"],
@@ -311,17 +338,219 @@ def _build_management_report(rows: list[dict], task: dict) -> dict:
         "priority_actions": priority_actions,
         "modules": _build_management_modules(focus_order, revenue_report, anomaly_report, flow_report),
         "executive_summary": [
-            f"最近周期总收入 {total_revenue:.0f}，总入场车次 {total_entry:.0f}，平均利用率 {avg_occupancy:.1%}。",
+            comparison_summary or f"最近周期总收入 {total_revenue:.0f}，总入场车次 {total_entry:.0f}，平均利用率 {avg_occupancy:.1%}。",
             summary_templates[second_summary_key] if first_summary_key == "revenue" else summary_templates[first_summary_key],
         ],
         "chart_rows": chart_rows,
         "chart_spec": {
             "type": "line",
+            "chart_family": "trend",
+            "style_preset": _resolve_management_chart_style(task),
+            "tone": "executive",
             "x_field": "stat_date",
             "y_field": "总收入",
             "series_field": "parking_lot",
         },
     }
+
+
+def _build_period_assessment(rows: list[dict], task: dict) -> dict:
+    current_rows = _filter_range(rows, task["time_field"], task["time_range"])
+    previous_rows = _filter_comparison_range(rows, task["time_field"], task.get("comparison_range"))
+    current_total_revenue = _sum(current_rows, "total_revenue")
+    current_total_entry = _sum(current_rows, "entry_count")
+    current_avg_occupancy = _avg(current_rows, "occupancy_rate")
+    current_risk_count = _count_high_risk_lots(current_rows)
+
+    previous_total_revenue = _sum(previous_rows, "total_revenue")
+    previous_total_entry = _sum(previous_rows, "entry_count")
+    previous_avg_occupancy = _avg(previous_rows, "occupancy_rate")
+    previous_risk_count = _count_high_risk_lots(previous_rows)
+
+    trend, reason_factors = _assess_period_trend(
+        current_total_revenue=current_total_revenue,
+        previous_total_revenue=previous_total_revenue,
+        current_total_entry=current_total_entry,
+        previous_total_entry=previous_total_entry,
+        current_avg_occupancy=current_avg_occupancy,
+        previous_avg_occupancy=previous_avg_occupancy,
+        current_risk_count=current_risk_count,
+        previous_risk_count=previous_risk_count,
+    )
+    comparison_summary = _build_period_assessment_summary(trend, reason_factors)
+    supporting_metrics = {
+        "current_total_revenue": current_total_revenue,
+        "previous_total_revenue": previous_total_revenue,
+        "current_total_entry_count": current_total_entry,
+        "previous_total_entry_count": previous_total_entry,
+        "current_avg_occupancy_rate": current_avg_occupancy,
+        "previous_avg_occupancy_rate": previous_avg_occupancy,
+        "current_risk_lot_count": current_risk_count,
+        "previous_risk_lot_count": previous_risk_count,
+    }
+
+    return {
+        "analysis_type": "period_assessment",
+        "trend": trend,
+        "comparison_summary": comparison_summary,
+        "reason_factors": reason_factors,
+        "supporting_metrics": supporting_metrics,
+        "executive_summary": [
+            comparison_summary,
+            "主要原因：" + "；".join(reason_factors[:2]) if reason_factors else "主要原因：当前暂无明显拖累因素。",
+        ],
+        "chart_rows": [
+            {"stat_date": row["stat_date"], "parking_lot": row["parking_lot"], "总收入": row["total_revenue"]}
+            for row in current_rows
+        ],
+        "chart_spec": {
+            "type": "line",
+            "chart_family": "trend",
+            "style_preset": "executive_clean",
+            "tone": "operations",
+            "x_field": "stat_date",
+            "y_field": "总收入",
+            "series_field": "parking_lot",
+        },
+    }
+
+
+def _build_management_comparison_summary(
+    current_rows: list[dict],
+    previous_rows: list[dict],
+    current_total_revenue: float,
+    current_total_entry: float,
+    current_avg_occupancy: float,
+    current_risk_count: int,
+) -> str | None:
+    if not previous_rows:
+        return None
+
+    previous_total_revenue = _sum(previous_rows, "total_revenue")
+    previous_total_entry = _sum(previous_rows, "entry_count")
+    previous_avg_occupancy = _avg(previous_rows, "occupancy_rate")
+    previous_risk_count = _count_high_risk_lots(previous_rows)
+
+    improvements = 0
+    deteriorations = 0
+    reasons = []
+
+    if current_total_revenue >= previous_total_revenue:
+        improvements += 1
+    else:
+        deteriorations += 1
+        reasons.append(f"总收入较上一周期减少 {abs(current_total_revenue - previous_total_revenue):.0f}")
+
+    if current_total_entry >= previous_total_entry:
+        improvements += 1
+    else:
+        deteriorations += 1
+        reasons.append(f"入场车次减少 {abs(current_total_entry - previous_total_entry):.0f}")
+
+    if current_avg_occupancy >= previous_avg_occupancy:
+        improvements += 1
+    else:
+        deteriorations += 1
+        reasons.append(
+            f"平均利用率由 {previous_avg_occupancy:.1%} 下降到 {current_avg_occupancy:.1%}"
+        )
+
+    if current_risk_count > previous_risk_count:
+        deteriorations += 1
+        reasons.append(f"异常车场数由 {previous_risk_count} 个增加到 {current_risk_count} 个")
+    elif current_risk_count < previous_risk_count:
+        improvements += 1
+
+    trend = "好转" if improvements >= deteriorations else "变坏"
+    if reasons:
+        reason_text = "主要受 " + "、".join(reasons[:2]) + " 影响。"
+    else:
+        reason_text = "核心指标整体改善。"
+    return f"与上一周期相比，停车经营整体{trend}。{reason_text}"
+
+
+def _count_high_risk_lots(rows: list[dict]) -> int:
+    current_by_lot = _group_by_lot(rows)
+    count = 0
+    for items in current_by_lot.values():
+        stats = _summarize_lot(items)
+        score = 0
+        if stats["payment_failure_rate"] >= 0.035:
+            score += 2
+        if stats["abnormal_open_count"] >= 50:
+            score += 3
+        if stats["free_release_count"] >= 120:
+            score += 1
+        if stats["occupancy_rate"] <= 0.70:
+            score += 1
+        if score > 0:
+            count += 1
+    return count
+
+
+def _assess_period_trend(
+    current_total_revenue: float,
+    previous_total_revenue: float,
+    current_total_entry: float,
+    previous_total_entry: float,
+    current_avg_occupancy: float,
+    previous_avg_occupancy: float,
+    current_risk_count: int,
+    previous_risk_count: int,
+) -> tuple[str, list[str]]:
+    improvements = 0
+    deteriorations = 0
+    reasons = []
+
+    if current_total_revenue >= previous_total_revenue:
+        improvements += 1
+        if current_total_revenue > previous_total_revenue:
+            reasons.append(f"总收入较上一周期增加 {abs(current_total_revenue - previous_total_revenue):.0f}")
+    else:
+        deteriorations += 1
+        reasons.append(f"总收入较上一周期减少 {abs(current_total_revenue - previous_total_revenue):.0f}")
+
+    if current_total_entry >= previous_total_entry:
+        improvements += 1
+        if current_total_entry > previous_total_entry:
+            reasons.append(f"入场车次增加 {abs(current_total_entry - previous_total_entry):.0f}")
+    else:
+        deteriorations += 1
+        reasons.append(f"入场车次减少 {abs(current_total_entry - previous_total_entry):.0f}")
+
+    if current_avg_occupancy >= previous_avg_occupancy:
+        improvements += 1
+        if current_avg_occupancy > previous_avg_occupancy:
+            reasons.append(f"平均利用率由 {previous_avg_occupancy:.1%} 提升到 {current_avg_occupancy:.1%}")
+    else:
+        deteriorations += 1
+        reasons.append(f"平均利用率由 {previous_avg_occupancy:.1%} 下降到 {current_avg_occupancy:.1%}")
+
+    if current_risk_count > previous_risk_count:
+        deteriorations += 1
+        reasons.append(f"异常车场数由 {previous_risk_count} 个增加到 {current_risk_count} 个")
+    elif current_risk_count < previous_risk_count:
+        improvements += 1
+        reasons.append(f"异常车场数由 {previous_risk_count} 个减少到 {current_risk_count} 个")
+
+    if improvements and deteriorations:
+        trend = "mixed"
+    elif improvements >= deteriorations:
+        trend = "improved"
+    else:
+        trend = "worsened"
+    return trend, reasons
+
+
+def _build_period_assessment_summary(trend: str, reason_factors: list[str]) -> str:
+    trend_label = {
+        "improved": "好转",
+        "worsened": "变坏",
+        "mixed": "出现分化",
+    }.get(trend, "出现波动")
+    if reason_factors:
+        return f"与上一周期相比，停车经营整体{trend_label}。主要受 {'、'.join(reason_factors[:2])} 影响。"
+    return f"与上一周期相比，停车经营整体{trend_label}。核心指标变化相对平稳。"
 
 
 def _build_management_daily_report(rows: list[dict], task: dict) -> dict:
@@ -420,6 +649,9 @@ def _build_management_daily_report(rows: list[dict], task: dict) -> dict:
         ],
         "chart_spec": {
             "type": "line",
+            "chart_family": "trend",
+            "style_preset": _resolve_management_chart_style(task),
+            "tone": "executive",
             "x_field": "stat_date",
             "y_field": "总收入",
             "series_field": "parking_lot",
@@ -457,9 +689,24 @@ def _filter_range(rows: list[dict], field: str, time_range: dict) -> list[dict]:
         for row in rows
         if start_date <= _to_date(row[field]) <= end_date
     ]
-    if filtered or time_range.get("preset") != "today":
+    if filtered:
         return filtered
-    return _latest_day_rows(rows, field)
+    if time_range.get("preset") == "today":
+        return _latest_day_rows(rows, field)
+    latest_date = max(_to_date(row[field]) for row in rows)
+    window_days = max((end_date - start_date).days, 0)
+    fallback_start = latest_date - timedelta(days=window_days)
+    return [
+        row
+        for row in rows
+        if fallback_start <= _to_date(row[field]) <= latest_date
+    ]
+
+
+def _filter_comparison_range(rows: list[dict], field: str, time_range: dict | None) -> list[dict]:
+    if not time_range or not time_range.get("start") or not time_range.get("end"):
+        return []
+    return _filter_range(rows, field, time_range)
 
 
 def _to_date(value) -> date:
@@ -660,3 +907,17 @@ def _build_management_modules(
         "flow_efficiency": flow_report["executive_summary"],
     }
     return {key: module_map[key] for key in focus_order}
+
+
+def _resolve_management_chart_style(task: dict) -> str:
+    semantic_plan = task.get("semantic_plan") or {}
+    focus_metrics = semantic_plan.get("focus_metrics", []) or task.get("focus_metrics", [])
+    anomaly_metrics = {"payment_failure_rate", "abnormal_open_count", "free_release_count"}
+    if any(metric in anomaly_metrics for metric in focus_metrics):
+        return "executive_risk"
+    return "executive_clean"
+
+
+def _risk_level_to_score(risk_level: str) -> int:
+    mapping = {"high": 92, "medium": 68, "low": 38}
+    return mapping.get(risk_level, 20)
