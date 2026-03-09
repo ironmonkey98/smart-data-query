@@ -224,8 +224,13 @@ def _handle_execute_sql(input_: dict, session_id: str) -> dict:
     if source_name not in DATA_SOURCES:
         return {"error": f"未知数据源: {source_name}"}
 
-    # 安全：只允许 SELECT
-    if not sql.upper().lstrip().startswith("SELECT"):
+    # 安全：只允许只读查询（SELECT / WITH...SELECT CTE / 注释开头）
+    # 去掉行注释和块注释后取首个非空词判断
+    import re as _re
+    sql_stripped = _re.sub(r"--[^\n]*", "", sql)           # 去掉 -- 行注释
+    sql_stripped = _re.sub(r"/\*.*?\*/", "", sql_stripped, flags=_re.DOTALL)  # 去掉 /* */ 块注释
+    first_keyword = (sql_stripped.split() or [""])[0].upper()
+    if first_keyword not in ("SELECT", "WITH"):
         return {"error": "只允许 SELECT 查询，禁止 INSERT / UPDATE / DELETE / DROP 等操作"}
 
     cfg = DATA_SOURCES[source_name]
