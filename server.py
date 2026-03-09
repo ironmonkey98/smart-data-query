@@ -38,11 +38,6 @@ GLOSSARY_TEXT = (BASE_DIR / "references" / "term-glossary.md").read_text(encodin
 
 # ─── 数据源配置 ──────────────────────────────────────────────────────────────
 DATA_SOURCES: dict[str, dict] = {
-    "sales": {
-        "source_type": "csv",
-        "source_path": str(BASE_DIR / "data" / "sample_sales.csv"),
-        "description": "销售数据。SQL 中表名为 `sales`，字段：order_date / region / product / paid_amount / order_status",
-    },
     "parking_ops": {
         "source_type": "sqlite",
         "source_path": str(BASE_DIR / "data" / "sample_parking_ops.db"),
@@ -166,13 +161,15 @@ TOOLS: list[dict] = [
 # ─── System Prompt ────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = f"""你是智能数据分析助理，通过自主编写 SQL 查询数据，基于真实数据给出业务分析结论。
 
-## 数据表结构
+## 数据表结构（停车经营 SQLite）
 
 {SCHEMA_TEXT}
 
 ## 业务术语对照
 
 {GLOSSARY_TEXT}
+
+> 当前系统只接入停车经营数据（parking_ops），不支持其他数据源。
 
 ## 澄清原则（最重要）
 

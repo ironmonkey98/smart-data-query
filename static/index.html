@@ -1057,35 +1057,17 @@ document.getElementById('session-display').textContent =
 // ── 加载数据源 chips ───────────────────────────────────────────────────────
 async function loadDataSources() {
   try {
-    const res = await fetch('/api/data-sources');
-    const data = await res.json();
     const chipsEl = document.getElementById('source-chips');
     chipsEl.innerHTML = '';
-    const orderedSources = [
-      ['parking_ops', data.parking_ops],
-      ...Object.entries(data).filter(([name]) => name !== 'parking_ops'),
-    ].filter(([, info]) => info);
-
-    const primaryLabel = document.createElement('span');
-    primaryLabel.className = 'source-group-label';
-    primaryLabel.textContent = '主分析域';
-    chipsEl.appendChild(primaryLabel);
-
-    orderedSources.forEach(([name, info], index) => {
-      if (index === 1) {
-        const secondaryLabel = document.createElement('span');
-        secondaryLabel.className = 'source-group-label';
-        secondaryLabel.textContent = '其他数据';
-        chipsEl.appendChild(secondaryLabel);
-      }
-      const chip = document.createElement('span');
-      chip.className = `chip ${index === 0 ? 'chip-primary' : 'chip-secondary'}`;
-      chip.textContent = index === 0
-        ? '停车经营分析 · 收入 / 车流 / 异常 / 管理层日报周报'
-        : '销售分析 · 次级入口';
-      chip.title = name;
-      chipsEl.appendChild(chip);
-    });
+    const label = document.createElement('span');
+    label.className = 'source-group-label';
+    label.textContent = '主分析域';
+    chipsEl.appendChild(label);
+    const chip = document.createElement('span');
+    chip.className = 'chip chip-primary';
+    chip.textContent = '停车经营分析 · 收入 / 车流 / 异常 / 管理层日报周报';
+    chip.title = 'parking_ops';
+    chipsEl.appendChild(chip);
   } catch (e) {
     console.warn('数据源加载失败', e);
   }
