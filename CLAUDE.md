@@ -4,133 +4,173 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**smart-data-query** is a Python CLI tool that converts natural language business questions into structured data queries, analyzes results, and generates charts + summaries. It specializes in parking lot operations analytics and general sales data querying.
+**smart-data-query** is a Python CLI tool + FastAPI web service that converts natural language business questions into structured data queries, analyzes results, and generates charts + summaries. Specializes in parking lot operations analytics and general sales data querying.
 
-No build system is needed — this is a pure Python 3.9+ project.
+No build system — pure Python 3.9+ project.
 
-## Running the Tool
+## Commands
+
+### Web Server (primary interface)
 
 ```bash
-# CSV data source
-python3 main.py \
-  --source-type csv \
-  --source data/sample_sales.csv \
-  --schema references/db-schema.md \
-  --glossary references/term-glossary.md \
-  --question "对比最近30天华东和华南的成交额趋势" \
-  --output-dir run-output
+# Start the web server (recommended — handles deps, port, data auto-generation)
+./start.sh
 
-# MySQL data source
-python3 main.py \
-  --source-type mysql \
-  --source data/sample_mysql_config.json \
-  --schema references/db-schema.md \
-  --glossary references/term-glossary.md \
-  --question "最近7天哪个车场收入下滑最明显" \
-  --output-dir mysql-output
-
-# With LLM enhancement
-export OPENAI_API_KEY="your-key"
-python3 main.py --enable-llm --question "..." [other args]
-
-# Multi-turn follow-up (first turn must use --session-file)
-python3 main.py --follow-up-question "为什么是B停车场？" --session-file session.json --output-dir output
+# Or directly
+python3 server.py          # runs on http://localhost:8000
 ```
 
-Optional deps for MySQL: `pip install pymysql` or `pip install mysql-connector-python`
+**Environment** (`.env` or shell export):
+```
+ANTHROPIC_AUTH_TOKEN=sk-...     # or ANTHROPIC_API_KEY
+ANTHROPIC_BASE_URL=...          # optional, for compatible APIs
+ANTHROPIC_MODEL=claude-opus-4-6 # optional override
+```
+
+### CLI tool
+
+```bash
+# CSV
+python3 main.py --source-type csv --source data/sample_sales.csv \
+  --schema references/db-schema.md --glossary references/term-glossary.md \
+  --question "对比最近30天华东和华南的成交额趋势" --output-dir run-output
+
+# SQLite (primary parking data source)
+python3 main.py --source-type sqlite --source data/sample_parking_ops.db \
+  --schema references/db-schema.md --glossary references/term-glossary.md \
+  --question "最近7天哪个车场收入下滑最明显" --output-dir run-output
+
+# Multi-turn follow-up
+python3 main.py --follow-up-question "为什么是B停车场？" \
+  --session-file run-output/session.json --output-dir run-output
+```
+
+### Tests
+
+```bash
+# Run all tests
+python3 -m unittest tests/test_codex_upgrade.py tests/test_real_parking_ingestion.py tests/test_report_page.py -v
+
+# Run a single test file
+python3 -m unittest tests/test_codex_upgrade.py -v
+```
+
+### Rebuild parking data from real Excel files
+
+```bash
+python3 scripts/build_parking_ops_from_excels.py
+# Outputs: data/sample_parking_ops.db + data/sample_parking_ops.csv
+```
 
 ## Architecture
 
-### Data Flow
+### Two modes of operation
+
+1. **CLI** (`main.py` → `scripts/smart_query.py`) — batch, file-in/file-out
+2. **Web** (`server.py`) — FastAPI + SSE streaming, Claude Tool Use loop
+
+### CLI data flow
 
 ```
 User question
-  → sql_generator.py: normalize_question()   # NL → semantic_plan → compatible task JSON
-  → connect_db.py: load_dataset()            # CSV or MySQL → list[dict]
-  → parking_analyst.py                       # semantic-first parking analysis dispatch
-  → (other intents)  → connect_db.py: execute_structured_task()
-  → llm_enhancer.py: enhance_analysis()     # optional LLM or rule-based narrative
-  → chart_render.py: render_svg_chart()     # SVG line chart output
-  → smart_query.py: aggregate results → summary.json + chart.svg + session.json
+  → sql_generator.py: normalize_question()   # NL → semantic_plan → task JSON
+  → connect_db.py: load_dataset()            # CSV / MySQL / SQLite → list[dict]
+  → parking_analyst.py                       # parking intents: 4 analysis modes
+  → connect_db.py: execute_structured_task() # other intents: generic executor
+  → llm_enhancer.py: enhance_analysis()      # optional LLM or rule-based narrative
+  → chart_render.py: render_svg_chart()      # SVG line chart
+  → smart_query.py: write summary.json + chart.svg + session.json
 ```
 
-### Key Files
+### Web server architecture (`server.py`)
+
+FastAPI serves `static/index.html` + a single POST endpoint `/api/chat` that streams SSE events. Internally runs a **Tool Use loop** (max 5 rounds):
+
+```
+Claude API (streaming)
+  → if stop_reason == "tool_use":
+      list_data_sources → returns DATA_SOURCES descriptions (no IO)
+      query_data        → asyncio.to_thread(_handle_query_data) → run_query()
+      reflect           → returns plan text, emits SSE {type: "reflect"} [CODEX_UPGRADE]
+      compare_periods   → two run_query calls, merges delta/pct_change [CODEX_UPGRADE]
+      save_insight      → appends to memory/insights.jsonl [CODEX_UPGRADE]
+  → tool results appended to session.messages → next Claude round
+```
+
+Sessions are in-memory (`sessions: dict[str, SessionData]`), TTL 2h, cleaned hourly.
+
+### Key files
 
 | File | Role |
 |------|------|
-| `main.py` | CLI entry point, argument parsing, task routing |
-| `scripts/smart_query.py` | Main orchestrator, coordinates all stages |
-| `scripts/sql_generator.py` | NL → semantic_plan → compatible task JSON |
-| `scripts/connect_db.py` | Unified data loader (CSV/MySQL) + generic query executor |
-| `scripts/parking_analyst.py` | Parking semantic-first diagnostics (revenue, anomaly, flow, daily/weekly report) |
-| `scripts/llm_enhancer.py` | Narrative generation — OpenAI-compatible API or rule engine |
-| `scripts/chart_render.py` | SVG line chart renderer (V1 only supports line charts) |
-| `references/db-schema.md` | Field definitions — required for query normalization |
+| `main.py` | CLI entry point, argument parsing |
+| `server.py` | FastAPI app + SSE streaming + Tool Use loop |
+| `static/index.html` | Single-page chat UI (all CSS/JS inline) |
+| `scripts/smart_query.py` | CLI orchestrator — do not change `run_query()` signature |
+| `scripts/sql_generator.py` | NL → task JSON; parking domain uses `semantic_plan` first |
+| `scripts/connect_db.py` | Unified data loader (CSV/MySQL/SQLite) + generic executor |
+| `scripts/parking_analyst.py` | 4 parking analysis modes: revenue, anomaly, flow, report |
+| `scripts/llm_enhancer.py` | Narrative generation (OpenAI-compatible or rule fallback) |
+| `scripts/chart_render.py` | SVG line chart renderer |
+| `references/db-schema.md` | Field definitions — must be kept in sync with actual data |
 | `references/term-glossary.md` | Business term aliases (e.g., 成交额 → paid_amount) |
+| `CODEX_UPGRADE.md` | Pending upgrade instructions for Codex (Tool 3-5 + time range expansion) |
 
-### Semantic Plan + Task Schema
+### Task JSON contract
 
-`sql_generator.py` now works in two steps for parking questions:
-
-1. Build a first-principles `semantic_plan`
-2. Map that plan to a backward-compatible task for the executor
-
-`semantic_plan` (parking domain only):
-
-```json
-{
-  "domain": "parking_ops",
-  "business_goal": "management_reporting|risk_detection|efficiency_diagnosis|revenue_diagnosis",
-  "analysis_job": "operational_overview|anomaly_focus|flow_or_occupancy|revenue_focus",
-  "decision_scope": "executive|operations",
-  "deliverable": "web_report|daily_brief|null",
-  "time_scope": {"preset": "last_7_days", "start": "...", "end": "..."},
-  "focus_entities": ["A停车场"],
-  "focus_dimensions": ["parking_lot"],
-  "focus_metrics": ["total_revenue", "occupancy_rate"],
-  "implicit_requirements": ["summary_first"],
-  "missing_information": []
-}
-```
-
-Backward-compatible task contract:
+Central data contract between `sql_generator` and all downstream modules:
 
 ```json
 {
   "intent": "trend_compare|compare|summary|parking_revenue_analysis|parking_anomaly_diagnosis|parking_flow_efficiency_analysis|parking_management_report",
   "metric": {"field": "paid_amount", "label": "成交额", "aggregation": "sum"},
-  "dimensions": ["region"],
-  "time_field": "order_date",
-  "time_granularity": "day",
-  "time_range": {"preset": "last_30_days", "start": "...", "end": "..."},
+  "time_range": {"preset": "last_7_days", "start": "2025-01-01", "end": "2025-01-07"},
   "filters": [{"field": "region", "operator": "in", "values": ["华东"]}],
-  "chart": {"type": "line", "x_field": "order_date", "y_field": "成交额", "series_field": "region"},
-  "assumptions": ["..."],
-  "semantic_plan": {"business_goal": "management_reporting"},
   "needs_clarification": false,
-  "clarifying_question": null
+  "clarifying_question": null,
+  "semantic_plan": { ... }   // parking domain only
 }
 ```
 
-Parking tasks still bypass the generic executor and go directly to `parking_analyst.py`.
-The executor now prefers `semantic_plan` and only falls back to `intent` when semantic routing is missing or incomplete.
+**Parking domain only**: `sql_generator` first builds a `semantic_plan` (business_goal / analysis_job / focus_metrics), maps it to the task JSON above, falling back to minimal rule parsing on failure. The executor prefers `semantic_plan` and treats `intent` as compatibility fallback.
 
-### Output Contract
+Parking intents always bypass the generic executor and go to `parking_analyst.py`.
 
-- **`summary.json`** — full structured result (task + result rows + summary + artifact paths)
-- **`chart.svg`** — line chart (only chart type supported in V1)
-- **`session.json`** — conversation context for multi-turn follow-ups
+### Data sources
 
-When `needs_clarification: true`, the tool returns early with a clarifying question instead of executing.
+| Source | File | Notes |
+|--------|------|-------|
+| Sales CSV | `data/sample_sales.csv` | Generated by `data/gen_mock_data.py` if < 100 rows |
+| Parking SQLite | `data/sample_parking_ops.db` | Primary parking source; rebuilt from Excel via `build_parking_ops_from_excels.py` |
+| Parking CSV | `data/sample_parking_ops.csv` | Derived daily-level fixture from SQLite; used as fallback |
 
-## V1 Boundaries (Known Limitations)
+The `.db` has 3 tables: `parking_lots`, `parking_payment_records`, `parking_passage_records`.
+`sample_parking_ops.csv` is derived via multi-table join (see README for field derivation logic).
 
-- Chart rendering: **line charts only** — bar/pie/heatmap are future extensions
-- NL parsing: parking domain uses semantic planning + mapping + rule fallback; other domains still use lighter rule parsing
-- Schema discovery: manual — `db-schema.md` and `term-glossary.md` must be maintained by hand
-- Excel data source: not yet implemented (planned extension per SKILL.md)
+### Output contract
 
-## Reference Docs
+- `summary.json` — full structured result (task + rows + summary + artifact paths)
+- `chart.svg` — line chart (only chart type in V1)
+- `session.json` — conversation context for multi-turn follow-ups
+- `memory/insights.jsonl` — persisted insights from `save_insight` tool (auto-created)
 
-- `SKILL.md` — product spec: when/how the tool should be used, output contracts, NL optimization strategy
-- `references/nl-optimization-notes.md` — intermediate representation design and follow-up question strategy
+When `needs_clarification: true`, tool returns early with `clarifying_question` instead of executing.
+
+### Relative time handling
+
+When system date is later than sample data, the executor auto-aligns "今天/最近7天/本周" to the latest available date in the dataset so reports can still be generated.
+
+## Pending upgrade (CODEX_UPGRADE.md)
+
+`CODEX_UPGRADE.md` contains complete implementation instructions for:
+- **3 new tools** in `server.py`: `reflect` (analysis planning), `compare_periods` (period-over-period diff), `save_insight` (persist findings to `memory/insights.jsonl`)
+- **Extended time range parsing** in `sql_generator._detect_time_range()`: 本周/上周/本月/上月/最近3天/最近14天/今年
+- **Memory injection** into SYSTEM_PROMPT: loads last 10 entries from `memory/insights.jsonl` at conversation start
+
+## V1 Boundaries
+
+- Chart rendering: **line charts only**
+- `compare_periods` tool currently stable for `sales` only
+- NL parsing: parking uses semantic planning; sales/other domains use lighter rule matching
+- Excel data source: not implemented
+- Schema discovery: manual (`db-schema.md` and `term-glossary.md` must be hand-maintained)
