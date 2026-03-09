@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 
 def diagnose_parking_operation(rows: list[dict], task: dict) -> dict:
@@ -11,6 +11,8 @@ def diagnose_parking_operation(rows: list[dict], task: dict) -> dict:
         return _analyze_anomaly(rows, task)
     if task["intent"] == "parking_flow_efficiency_analysis":
         return _analyze_flow_efficiency(rows, task)
+    if task["intent"] == "parking_management_daily_report":
+        return _build_management_daily_report(rows, task)
     if task["intent"] == "parking_management_report":
         return _build_management_report(rows, task)
     raise ValueError(f"不支持的停车经营分析意图: {task['intent']}")
@@ -251,6 +253,7 @@ def _build_management_report(rows: list[dict], task: dict) -> dict:
     chart_rows = [{"stat_date": row["stat_date"], "parking_lot": row["parking_lot"], "总收入": row["total_revenue"]} for row in current_rows]
     return {
         "analysis_type": "management_report",
+        "report_type": "weekly",
         "overview": {
             "reporting_window": task["time_range"]["preset"],
             "total_revenue": total_revenue,
@@ -270,6 +273,109 @@ def _build_management_report(rows: list[dict], task: dict) -> dict:
             f"需重点关注 {revenue_report['primary_lot']} 的收入下滑，以及 {anomaly_report['risk_level']} 风险异常。",
         ],
         "chart_rows": chart_rows,
+        "chart_spec": {
+            "type": "line",
+            "x_field": "stat_date",
+            "y_field": "总收入",
+            "series_field": "parking_lot",
+        },
+    }
+
+
+def _build_management_daily_report(rows: list[dict], task: dict) -> dict:
+    current_rows = _filter_range(rows, task["time_field"], task["time_range"])
+    if not current_rows:
+        current_rows = _latest_day_rows(rows, task["time_field"])
+    current_date = max(_to_date(row[task["time_field"]]) for row in current_rows)
+    previous_date = current_date - timedelta(days=1)
+    previous_rows = [
+        row
+        for row in rows
+        if _to_date(row[task["time_field"]]) == previous_date
+    ]
+
+    current_by_lot = _group_by_lot(current_rows)
+    previous_by_lot = _group_by_lot(previous_rows)
+
+    focus_lots = []
+    anomaly_diagnosis = []
+    for lot, items in current_by_lot.items():
+        current_stats = _summarize_lot(items)
+        previous_stats = _summarize_lot(previous_by_lot.get(lot, []))
+        revenue_delta = round(current_stats["total_revenue"] - previous_stats["total_revenue"], 2)
+        if revenue_delta < 0:
+            focus_lots.append({
+                "parking_lot": lot,
+                "topic": "今日收入承压",
+                "summary": f"较前一日下降 {abs(revenue_delta):.0f}，今日收入 {current_stats['total_revenue']:.0f}。",
+            })
+        if current_stats["payment_failure_rate"] >= 0.05 or current_stats["abnormal_open_count"] >= 20:
+            anomaly_diagnosis.append({
+                "parking_lot": lot,
+                "risk_level": "high" if current_stats["payment_failure_rate"] >= 0.08 else "medium",
+                "reasons": _build_daily_anomaly_reasons(current_stats),
+            })
+
+    if anomaly_diagnosis:
+        focus_lots.extend(
+            {
+                "parking_lot": item["parking_lot"],
+                "topic": "今日异常",
+                "summary": "；".join(item["reasons"]),
+            }
+            for item in anomaly_diagnosis
+        )
+
+    if not focus_lots:
+        best_lot, best_stats = max(
+            ((lot, _summarize_lot(items)) for lot, items in current_by_lot.items()),
+            key=lambda item: item[1]["total_revenue"],
+        )
+        focus_lots.append({
+            "parking_lot": best_lot,
+            "topic": "今日表现最佳",
+            "summary": f"今日收入 {best_stats['total_revenue']:.0f}，利用率 {best_stats['occupancy_rate']:.1%}。",
+        })
+
+    overview = {
+        "reporting_window": "today",
+        "report_date": current_date.isoformat(),
+        "total_revenue": _sum(current_rows, "total_revenue"),
+        "total_entry_count": _sum(current_rows, "entry_count"),
+        "avg_occupancy_rate": round(_avg(current_rows, "occupancy_rate"), 4),
+        "high_risk_lot_count": len(anomaly_diagnosis),
+    }
+    priority_actions = _dedupe_actions(
+        _build_anomaly_recommendations(anomaly_diagnosis)
+        + _build_daily_actions(current_by_lot, previous_by_lot)
+    )
+    chart_rows = _latest_n_day_rows(rows, task["time_field"], 7)
+    primary_focus = focus_lots[0]
+
+    return {
+        "analysis_type": "management_report",
+        "report_type": "daily",
+        "overview": overview,
+        "focus_lots": focus_lots[:4],
+        "priority_actions": priority_actions,
+        "modules": {
+            "daily_overview": [
+                f"今日总收入 {overview['total_revenue']:.0f}，总入场车次 {overview['total_entry_count']:.0f}。"
+            ],
+            "daily_risks": [
+                f"今日识别到 {len(anomaly_diagnosis)} 个高关注车场。"
+                if anomaly_diagnosis else "今日未识别到高风险车场。"
+            ],
+            "daily_focus": [primary_focus["summary"]],
+        },
+        "executive_summary": [
+            f"截至 {current_date.isoformat()}，今日总收入 {overview['total_revenue']:.0f}，平均利用率 {overview['avg_occupancy_rate']:.1%}。",
+            f"当前最需关注 {primary_focus['parking_lot']}，主题为“{primary_focus['topic']}”。",
+        ],
+        "chart_rows": [
+            {"stat_date": row["stat_date"], "parking_lot": row["parking_lot"], "总收入": row["total_revenue"]}
+            for row in chart_rows
+        ],
         "chart_spec": {
             "type": "line",
             "x_field": "stat_date",
@@ -304,11 +410,14 @@ def _split_rows_for_revenue_baseline(rows: list[dict], entity_field: str) -> tup
 def _filter_range(rows: list[dict], field: str, time_range: dict) -> list[dict]:
     start_date = date.fromisoformat(time_range["start"])
     end_date = date.fromisoformat(time_range["end"])
-    return [
+    filtered = [
         row
         for row in rows
         if start_date <= _to_date(row[field]) <= end_date
     ]
+    if filtered or time_range.get("preset") != "today":
+        return filtered
+    return _latest_day_rows(rows, field)
 
 
 def _to_date(value) -> date:
@@ -406,3 +515,43 @@ def _score_to_risk(score: int) -> str:
 def _max_risk(current: str, candidate: str) -> str:
     ranking = {"low": 1, "medium": 2, "high": 3}
     return candidate if ranking[candidate] > ranking[current] else current
+
+
+def _latest_day_rows(rows: list[dict], field: str) -> list[dict]:
+    if not rows:
+        return []
+    latest_date = max(_to_date(row[field]) for row in rows)
+    return [row for row in rows if _to_date(row[field]) == latest_date]
+
+
+def _latest_n_day_rows(rows: list[dict], field: str, days: int) -> list[dict]:
+    if not rows:
+        return []
+    ordered_dates = sorted({_to_date(row[field]) for row in rows})
+    selected_dates = set(ordered_dates[-days:])
+    return [row for row in rows if _to_date(row[field]) in selected_dates]
+
+
+def _build_daily_anomaly_reasons(stats: dict) -> list[str]:
+    reasons = []
+    if stats["payment_failure_rate"] >= 0.05:
+        reasons.append(f"支付失败率达到 {stats['payment_failure_rate']:.1%}")
+    if stats["abnormal_open_count"] >= 20:
+        reasons.append(f"异常开闸今日累计 {stats['abnormal_open_count']:.0f} 次")
+    if stats["occupancy_rate"] <= 0.65:
+        reasons.append(f"利用率仅 {stats['occupancy_rate']:.1%}")
+    return reasons or ["今日经营指标波动较大"]
+
+
+def _build_daily_actions(current_by_lot: dict[str, list[dict]], previous_by_lot: dict[str, list[dict]]) -> list[str]:
+    actions = []
+    for lot, items in current_by_lot.items():
+        current_stats = _summarize_lot(items)
+        previous_stats = _summarize_lot(previous_by_lot.get(lot, []))
+        if previous_stats["total_revenue"] and current_stats["total_revenue"] < previous_stats["total_revenue"] * 0.9:
+            actions.append(f"复盘 {lot} 今日收入下滑原因，优先检查支付、导流和现场放行。")
+        if current_stats["payment_failure_rate"] >= 0.05:
+            actions.append(f"排查 {lot} 今日支付链路与出场设备状态。")
+    if not actions:
+        actions.append("继续监控今日高峰期经营指标，关注支付失败和利用率波动。")
+    return actions

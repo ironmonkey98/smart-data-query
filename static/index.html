@@ -502,6 +502,330 @@ header::before {
   box-shadow: none;
 }
 #send-btn svg { pointer-events: none; }
+
+/* ── Reflect 计划块 ──────────────────────────────────────── */
+.reflect-plan {
+  border: 1px solid var(--border-mid);
+  border-left: 2px solid var(--silver-lit);
+  border-radius: 4px;
+  background: var(--surface-1);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.reflect-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  font-family: "IBM Plex Mono", monospace;
+  letter-spacing: .1em;
+  color: var(--silver);
+  border-bottom: 1px solid var(--border-dim);
+}
+.reflect-body {
+  padding: 10px 14px;
+  color: var(--text-mid);
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+.reflect-toggle {
+  margin-left: auto;
+  font-size: 10px;
+  background: none;
+  border: 1px solid var(--border-mid);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.reflect-toggle:hover {
+  border-color: var(--border-lit);
+  color: var(--text-mid);
+}
+
+.report-launch {
+  display: block;
+  text-decoration: none;
+  border: 1px solid var(--border-mid);
+  border-left: 2px solid var(--gold-bright);
+  border-radius: 4px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(19,25,35,.96) 0%, rgba(13,17,24,.98) 100%);
+  color: var(--text-bright);
+}
+.report-launch:hover {
+  border-color: var(--gold-mid);
+  box-shadow: 0 0 0 1px rgba(184,146,46,.14);
+}
+.report-launch-kicker {
+  display: block;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  letter-spacing: .16em;
+  color: var(--gold-mid);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.report-launch-title {
+  display: block;
+  font-family: "Cormorant Garamond", serif;
+  font-size: 24px;
+  line-height: 1.05;
+  color: var(--text-bright);
+}
+.report-launch-copy {
+  display: block;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-mid);
+  margin-top: 8px;
+}
+
+body.report-mode {
+  overflow: auto;
+}
+body.report-mode .chat-only {
+  display: none !important;
+}
+body.report-mode header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+#report-shell {
+  display: none;
+  min-height: calc(100dvh - 94px);
+  padding: 28px;
+}
+body.report-mode #report-shell {
+  display: block;
+}
+.report-frame {
+  max-width: 1180px;
+  margin: 0 auto 40px;
+}
+.report-hero {
+  display: grid;
+  grid-template-columns: 1.2fr .8fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.report-panel {
+  background:
+    linear-gradient(180deg, rgba(19,25,35,.98) 0%, rgba(13,17,24,.98) 100%);
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+.report-panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212,170,78,.85), transparent);
+}
+.report-hero-main {
+  padding: 26px 26px 22px;
+}
+.report-kicker {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .2em;
+  color: var(--gold-mid);
+  text-transform: uppercase;
+}
+.report-title {
+  margin-top: 10px;
+  font-family: "Cormorant Garamond", serif;
+  font-size: clamp(36px, 5vw, 56px);
+  line-height: .95;
+  color: var(--text-bright);
+}
+.report-subtitle {
+  margin-top: 14px;
+  max-width: 58ch;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text-mid);
+}
+.report-meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .12em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.report-actions {
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.report-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  color: var(--silver-lit);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.report-nav:hover {
+  color: var(--gold-pale);
+}
+.report-risk-banner {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--border-dim);
+  background: rgba(138,104,32,.08);
+}
+.report-risk-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .16em;
+  color: var(--gold-mid);
+  text-transform: uppercase;
+}
+.report-risk-copy {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-mid);
+}
+.report-section {
+  margin-top: 18px;
+  padding: 18px;
+}
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 18px;
+}
+.report-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.report-kpi {
+  padding: 16px;
+  border: 1px solid var(--border-dim);
+  background: rgba(255,250,241,.02);
+  min-height: 128px;
+}
+.report-kpi-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--silver);
+}
+.report-kpi-value {
+  margin-top: 12px;
+  font-family: "Cormorant Garamond", serif;
+  font-size: 38px;
+  line-height: .95;
+  color: var(--text-bright);
+}
+.report-kpi-note {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.report-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.report-section-title {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 30px;
+  color: var(--text-bright);
+}
+.report-section-note {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.report-summary-list,
+.report-actions-list,
+.report-focus-list,
+.report-module-list {
+  display: grid;
+  gap: 12px;
+}
+.report-summary-item,
+.report-action-item,
+.report-focus-item,
+.report-module-item {
+  border: 1px solid var(--border-dim);
+  padding: 14px 16px;
+  background: rgba(255,250,241,.02);
+}
+.report-focus-eyebrow,
+.report-module-name {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--gold-mid);
+}
+.report-focus-title {
+  margin-top: 8px;
+  font-size: 18px;
+  color: var(--text-bright);
+}
+.report-focus-copy,
+.report-module-copy,
+.report-action-copy {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text-mid);
+}
+.report-chart-shell {
+  overflow: hidden;
+  border: 1px solid var(--border-dim);
+  background: rgba(255,250,241,.02);
+}
+.report-chart-shell svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.report-loading,
+.report-error {
+  max-width: 960px;
+  margin: 80px auto;
+  padding: 20px 24px;
+  border: 1px solid var(--border-mid);
+  background: var(--surface-1);
+}
+.report-error {
+  border-left: 2px solid var(--crimson);
+  color: #e8a39b;
+}
+@media (max-width: 960px) {
+  #report-shell {
+    padding: 18px;
+  }
+  .report-hero,
+  .report-kpis,
+  .report-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>
 </head>
 <body>
@@ -544,7 +868,7 @@ header::before {
 </header>
 
 <!-- ── Messages ── -->
-<div id="messages">
+<div id="messages" class="chat-only">
   <div class="empty-state" id="empty-state">
     <!-- Geometric data icon -->
     <svg class="empty-mark" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -563,7 +887,9 @@ header::before {
 </div>
 
 <!-- ── Quick Prompts ── -->
-<div id="quick-prompts">
+<div id="report-shell"></div>
+
+<div id="quick-prompts" class="chat-only">
   <button class="quick-btn" onclick="sendQuick('有哪些数据可以查？')">可用数据源</button>
   <button class="quick-btn" onclick="sendQuick('最近30天华东和华南的成交额趋势')">成交额趋势</button>
   <button class="quick-btn" onclick="sendQuick('最近7天哪个车场收入下滑最明显？')">车场收入分析</button>
@@ -571,7 +897,7 @@ header::before {
 </div>
 
 <!-- ── Input Bar ── -->
-<div id="input-bar">
+<div id="input-bar" class="chat-only">
   <textarea id="user-input" placeholder="输入分析问题，Enter 发送 · Shift+Enter 换行" rows="1"></textarea>
   <button id="send-btn" title="发送">
     <!-- Arrow right icon -->
@@ -594,6 +920,8 @@ const ICON_USER = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" x
 </svg>`;
 
 // ── Session 管理 ──────────────────────────────────────────────────────────
+const isReportMode = window.location.pathname.startsWith('/report/');
+const reportId = isReportMode ? window.location.pathname.split('/').filter(Boolean).pop() : null;
 const sessionId = localStorage.getItem('sdq_session_id') || (() => {
   const id = crypto.randomUUID();
   localStorage.setItem('sdq_session_id', id);
@@ -622,13 +950,16 @@ async function loadDataSources() {
     console.warn('数据源加载失败', e);
   }
 }
-loadDataSources();
+if (!isReportMode) {
+  loadDataSources();
+}
 
 // ── UI 工具函数 ────────────────────────────────────────────────────────────
 const messagesEl = document.getElementById('messages');
 let emptyStateEl = document.getElementById('empty-state');
 const userInput  = document.getElementById('user-input');
 const sendBtn    = document.getElementById('send-btn');
+const reportShell = document.getElementById('report-shell');
 
 function hideEmptyState() {
   if (emptyStateEl) { emptyStateEl.remove(); emptyStateEl = null; }
@@ -701,6 +1032,186 @@ function createLoadingIndicator(text = '正在查询数据') {
   return el;
 }
 
+function createReportLaunchCard(reportUrl) {
+  const link = document.createElement('a');
+  link.className = 'report-launch';
+  link.href = reportUrl;
+  link.innerHTML = `
+    <span class="report-launch-kicker">Management Brief Ready</span>
+    <span class="report-launch-title">打开管理层简报</span>
+    <span class="report-launch-copy">切换到独立报表页查看核心指标、重点车场、风险摘要和优先动作。</span>
+  `;
+  return link;
+}
+
+function formatWindowLabel(preset) {
+  const map = {
+    last_7_days: '最近 7 天',
+    last_30_days: '最近 30 天',
+    this_week: '本周',
+    last_week: '上周',
+    this_month: '本月',
+    last_month: '上月',
+    this_year: '今年',
+  };
+  return map[preset] || preset || '当前周期';
+}
+
+function formatMoney(value) {
+  return '¥' + Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+}
+
+function formatCount(value) {
+  return Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+}
+
+function formatPercent(value) {
+  return `${(Number(value || 0) * 100).toFixed(1)}%`;
+}
+
+function renderReportPage(payload) {
+  const overview = payload.overview || {};
+  const narrative = typeof payload.narrative === 'string'
+    ? payload.narrative
+    : (payload.narrative?.narrative || '');
+
+  document.body.classList.add('report-mode');
+  document.title = `${payload.title || '管理层简报'} — 智能数据分析`;
+  reportShell.innerHTML = `
+    <div class="report-frame">
+      <section class="report-hero">
+        <article class="report-panel report-hero-main">
+          <div class="report-kicker">Parking Management Brief</div>
+          <h1 class="report-title">${escapeHtml(payload.title || '停车经营管理层简报')}</h1>
+          <p class="report-subtitle">${escapeHtml(narrative || '本页汇总经营结论、重点车场、风险焦点与行动建议，供管理层快速浏览。')}</p>
+          <div class="report-meta">
+            <span>周期 ${escapeHtml(formatWindowLabel(overview.reporting_window))}</span>
+            <span>生成于 ${escapeHtml((payload.generated_at || '').replace('T', ' ').replace('Z', ' UTC'))}</span>
+          </div>
+        </article>
+        <aside class="report-panel report-actions">
+          <a class="report-nav" href="/">返回分析对话</a>
+          <div class="report-risk-banner">
+            <div class="report-risk-label">Focus Question</div>
+            <div class="report-risk-copy">${escapeHtml(payload.question || '管理层经营周报')}</div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="report-panel report-section">
+        <div class="report-section-head">
+          <h2 class="report-section-title">经营概览</h2>
+          <span class="report-section-note">Executive Snapshot</span>
+        </div>
+        <div class="report-kpis report-kpi-grid">
+          <article class="report-kpi">
+            <div class="report-kpi-label">总收入</div>
+            <div class="report-kpi-value">${escapeHtml(formatMoney(overview.total_revenue))}</div>
+            <div class="report-kpi-note">本周期累计收入规模。</div>
+          </article>
+          <article class="report-kpi">
+            <div class="report-kpi-label">总入场车次</div>
+            <div class="report-kpi-value">${escapeHtml(formatCount(overview.total_entry_count))}</div>
+            <div class="report-kpi-note">反映整体车流强度。</div>
+          </article>
+          <article class="report-kpi">
+            <div class="report-kpi-label">平均利用率</div>
+            <div class="report-kpi-value">${escapeHtml(formatPercent(overview.avg_occupancy_rate))}</div>
+            <div class="report-kpi-note">衡量车位资源使用效率。</div>
+          </article>
+          <article class="report-kpi">
+            <div class="report-kpi-label">高风险车场数</div>
+            <div class="report-kpi-value">${escapeHtml(formatCount(overview.high_risk_lot_count))}</div>
+            <div class="report-kpi-note">需被管理层优先过目的风险点数。</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="report-grid">
+        <article class="report-panel report-section" style="grid-column: span 5;">
+          <div class="report-section-head">
+            <h2 class="report-section-title">管理结论</h2>
+            <span class="report-section-note">Conclusion First</span>
+          </div>
+          <div class="report-summary-list">
+            ${(payload.executive_summary || []).map(item => `
+              <div class="report-summary-item">${escapeHtml(item)}</div>
+            `).join('')}
+          </div>
+        </article>
+
+        <article class="report-panel report-section" style="grid-column: span 7;">
+          <div class="report-section-head">
+            <h2 class="report-section-title">重点车场</h2>
+            <span class="report-section-note">Attention Queue</span>
+          </div>
+          <div class="report-focus-list">
+            ${(payload.focus_lots || []).map(item => `
+              <div class="report-focus-item">
+                <div class="report-focus-eyebrow">${escapeHtml(item.topic || '重点事项')}</div>
+                <div class="report-focus-title">${escapeHtml(item.parking_lot || '重点车场')}</div>
+                <div class="report-focus-copy">${escapeHtml(item.summary || '')}</div>
+              </div>
+            `).join('')}
+          </div>
+        </article>
+
+        <article class="report-panel report-section" style="grid-column: span 6;">
+          <div class="report-section-head">
+            <h2 class="report-section-title">优先动作</h2>
+            <span class="report-section-note">Immediate Actions</span>
+          </div>
+          <div class="report-actions-list">
+            ${(payload.priority_actions || []).map(item => `
+              <div class="report-action-item">
+                <div class="report-action-copy">${escapeHtml(item)}</div>
+              </div>
+            `).join('')}
+          </div>
+        </article>
+
+        <article class="report-panel report-section" style="grid-column: span 6;">
+          <div class="report-section-head">
+            <h2 class="report-section-title">模块摘要</h2>
+            <span class="report-section-note">Signals</span>
+          </div>
+          <div class="report-module-list">
+            ${Object.entries(payload.modules || {}).map(([name, items]) => `
+              <div class="report-module-item">
+                <div class="report-module-name">${escapeHtml(name)}</div>
+                <div class="report-module-copy">${escapeHtml((items || []).join(' '))}</div>
+              </div>
+            `).join('')}
+          </div>
+        </article>
+      </section>
+
+      <section class="report-panel report-section" style="margin-top:18px;">
+        <div class="report-section-head">
+          <h2 class="report-section-title">收入趋势</h2>
+          <span class="report-section-note">Trend View</span>
+        </div>
+        <div class="report-chart-shell">${payload.chart_svg || ''}</div>
+      </section>
+    </div>
+  `;
+}
+
+async function bootReportPage() {
+  document.getElementById('session-display').textContent = 'REPORT — ' + reportId.toUpperCase().slice(0, 8);
+  reportShell.innerHTML = '<div class="report-loading">正在加载管理层简报…</div>';
+  try {
+    const response = await fetch(`/api/report/${reportId}`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    renderReportPage(payload);
+  } catch (error) {
+    reportShell.innerHTML = `<div class="report-error">报表加载失败：${escapeHtml(error.message)}</div>`;
+  }
+}
+
 // ── SSE 聊天核心 ───────────────────────────────────────────────────────────
 let isProcessing = false;
 
@@ -770,12 +1281,42 @@ function handleSseEvent(event, bubble, appendExtra, setLoadingEl) {
       break;
 
     case 'tool_use': {
-      const label = event.tool_name === 'list_data_sources'
-        ? 'QUERYING DATA SOURCES'
-        : 'EXECUTING ANALYSIS';
+      const labelMap = {
+        'list_data_sources': 'QUERYING DATA SOURCES',
+        'reflect': 'PLANNING ANALYSIS',
+        'compare_periods': 'COMPARING PERIODS',
+        'save_insight': 'SAVING INSIGHT',
+      };
+      const label = labelMap[event.tool_name] || 'EXECUTING ANALYSIS';
       const el = createLoadingIndicator(label);
       appendExtra(el);
       setLoadingEl(el);
+      break;
+    }
+
+    case 'reflect': {
+      setLoadingEl(null);
+      const planEl = document.createElement('div');
+      planEl.className = 'reflect-plan';
+      planEl.innerHTML = `
+        <div class="reflect-header">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.2"/>
+            <path d="M6 3.5v3l2 1.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+          <span>分析计划</span>
+          <button class="reflect-toggle">收起</button>
+        </div>
+        <div class="reflect-body">${escapeHtml(event.plan || '')}</div>
+      `;
+      planEl.querySelector('.reflect-toggle').onclick = function() {
+        const body = planEl.querySelector('.reflect-body');
+        const collapsed = body.style.display === 'none';
+        body.style.display = collapsed ? '' : 'none';
+        this.textContent = collapsed ? '收起' : '展开';
+      };
+      appendExtra(planEl);
+      scrollToBottom();
       break;
     }
 
@@ -801,6 +1342,10 @@ function handleSseEvent(event, bubble, appendExtra, setLoadingEl) {
         errEl.className = 'error-bubble';
         errEl.textContent = `QUERY ERROR — ${event.error}`;
         appendExtra(errEl);
+      }
+
+      if (event.report_url) {
+        appendExtra(createReportLaunchCard(event.report_url));
       }
       break;
     }
@@ -843,6 +1388,10 @@ sendBtn.addEventListener('click', () => {
 function sendQuick(text) {
   if (isProcessing) return;
   sendMessage(text);
+}
+
+if (isReportMode && reportId) {
+  bootReportPage();
 }
 </script>
 </body>

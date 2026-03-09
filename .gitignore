@@ -12,7 +12,8 @@ __pycache__/
 
 # 运行输出（自动生成，不需要版本控制）
 run-output/
-memory/
+memory/*
+!memory/.gitkeep
 
 # 虚拟环境
 venv/

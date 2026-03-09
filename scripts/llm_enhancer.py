@@ -98,6 +98,30 @@ def handle_follow_up(
         return {"mode": "rule", "answer": answer, "fallback_reason": "network_error"}
 
 
+def plan_parking_question(
+    question: str,
+    schema_text: str,
+    glossary_text: str,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> dict:
+    resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
+    if not resolved_api_key:
+        raise ValueError("missing_api_key")
+
+    resolved_base_url = (base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    resolved_model = model or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    prompt = _build_parking_planner_prompt(question, schema_text, glossary_text)
+    llm_text = _call_openai_compatible(
+        prompt=prompt,
+        api_key=resolved_api_key,
+        base_url=resolved_base_url,
+        model=resolved_model,
+    )
+    return _parse_planner_json(llm_text)
+
+
 def _build_rule_narrative(task: dict, analysis: dict) -> str:
     analysis_type = analysis.get("analysis_type")
     if analysis_type == "revenue":
@@ -114,6 +138,12 @@ def _build_rule_narrative(task: dict, analysis: dict) -> str:
         return f"{lot} 的车流与利用率下滑最明显，主要信号包括 {diagnosis}。"
     if analysis_type == "management_report":
         overview = analysis.get("overview", {})
+        if analysis.get("report_type") == "daily":
+            return (
+                f"截至 {overview.get('report_date', '今日')}，总收入 {overview.get('total_revenue', 0):.0f}，"
+                f"总入场车次 {overview.get('total_entry_count', 0):.0f}，"
+                f"平均利用率 {overview.get('avg_occupancy_rate', 0):.1%}。"
+            )
         return (
             f"本期总收入 {overview.get('total_revenue', 0):.0f}，总入场车次 {overview.get('total_entry_count', 0):.0f}，"
             f"平均利用率 {overview.get('avg_occupancy_rate', 0):.1%}。"
@@ -126,6 +156,8 @@ def _build_follow_up_suggestions(task: dict, analysis: dict) -> list[str]:
     if analysis_type == "revenue":
         return ["为什么是这个车场？", "支付失败和异常开闸分别影响多大？", "下一步优先处理什么？"]
     if analysis_type == "management_report":
+        if analysis.get("report_type") == "daily":
+            return ["今天最需要关注哪个车场？", "今日最优先动作是什么？", "今日异常主要集中在哪些指标？"]
         return ["哪一个车场最需要管理层关注？", "本周最优先的动作是什么？", "高风险点集中在哪些指标？"]
     return ["能展开解释原因吗？", "建议动作的优先级是什么？"]
 
@@ -160,6 +192,48 @@ def _build_analysis_prompt(task: dict, analysis: dict, rule_narrative: str) -> s
         f"分析：{json.dumps(analysis, ensure_ascii=False)}\n"
         f"规则摘要：{rule_narrative}"
     )
+
+
+def _build_parking_planner_prompt(question: str, schema_text: str, glossary_text: str) -> str:
+    schema_excerpt = "\n".join(line for line in schema_text.splitlines()[:12] if line.strip())
+    glossary_excerpt = "\n".join(line for line in glossary_text.splitlines()[:20] if line.strip())
+    return (
+        "你是停车经营问数系统的语义规划器。你的任务是把用户问题拆解成稳定的结构化 JSON。"
+        "不要写解释，不要输出 Markdown，只输出一个 JSON 对象。\n\n"
+        "要求：\n"
+        "1. domain 固定为 parking_ops。\n"
+        "2. intent 只能是以下之一："
+        "parking_management_daily_report, parking_management_report, parking_anomaly_diagnosis, "
+        "parking_flow_efficiency_analysis, parking_revenue_analysis。\n"
+        "3. time_range 必须包含 preset, start, end；如果缺时间范围可返回 preset=all 且 start/end=null。\n"
+        "4. report_type 只能是 daily 或 weekly；非报表类可返回 null。\n"
+        "5. focus_entities 只放车场名；focus_metrics 只放字段名："
+        "total_revenue, entry_count, occupancy_rate, payment_failure_rate, abnormal_open_count, free_release_count。\n"
+        "6. 如果问题缺关键口径，需要设置 needs_clarification=true，并给出 clarification_question。\n\n"
+        "输出 JSON 模板：\n"
+        "{"
+        "\"domain\":\"parking_ops\","
+        "\"intent\":\"parking_management_report\","
+        "\"report_type\":\"weekly\","
+        "\"time_range\":{\"preset\":\"last_7_days\",\"start\":\"2026-03-03\",\"end\":\"2026-03-09\"},"
+        "\"focus_entities\":[],"
+        "\"focus_metrics\":[\"total_revenue\"],"
+        "\"needs_clarification\":false,"
+        "\"clarification_question\":null"
+        "}\n\n"
+        f"Schema 摘要：\n{schema_excerpt}\n\n"
+        f"术语摘要：\n{glossary_excerpt}\n\n"
+        f"用户问题：{question}"
+    )
+
+
+def _parse_planner_json(llm_text: str) -> dict:
+    cleaned = llm_text.strip()
+    if cleaned.startswith("```"):
+        parts = cleaned.split("```")
+        cleaned = next((part for part in parts if "{" in part and "}" in part), cleaned)
+        cleaned = cleaned.replace("json", "", 1).strip()
+    return json.loads(cleaned)
 
 
 def _call_openai_compatible(prompt: str, api_key: str, base_url: str, model: str) -> str:

@@ -10,6 +10,8 @@
 - 停车经营异常诊断与建议
 - 停车经营车流与利用率分析
 - 停车经营管理层综合周报
+- 停车经营管理层日报
+- Web 独立管理层报表页
 - 规则增强解释
 - OpenAI 兼容接口增强解释
 - 基于 session 文件的多轮追问
@@ -42,7 +44,7 @@ smart-data-query/
 ## 运行测试
 
 ```bash
-python3 -m unittest "/Users/yehong/机器狗资料/cloud-robot-platform/OUTPUT_DIR/smart-data-query/tests/test_smart_data_query.py"
+python3 -m unittest "tests/test_codex_upgrade.py" "tests/test_report_page.py" -v
 ```
 
 ## 直接运行程序
@@ -150,6 +152,25 @@ python3 "/Users/yehong/机器狗资料/cloud-robot-platform/OUTPUT_DIR/smart-dat
   --output-dir "/Users/yehong/机器狗资料/cloud-robot-platform/OUTPUT_DIR/smart-data-query/report-demo-output"
 ```
 
+Web 端输入 `生成最近7天停车经营周报，给管理层看` 时，会直接生成独立报表页入口。
+
+## 管理层日报示例
+
+```bash
+python3 "/Users/yehong/机器狗资料/cloud-robot-platform/OUTPUT_DIR/smart-data-query/main.py" \
+  --source-type csv \
+  --source "/Users/yehong/机器狗资料/cloud-robot-platform/OUTPUT_DIR/smart-data-query/data/sample_parking_ops.csv" \
+  --schema "/Users/yehong/机器狗资料/cloud-robot-platform/OUTPUT_DIR/smart-data-query/references/db-schema.md" \
+  --glossary "/Users/yehong/机器狗资料/cloud-robot-platform/OUTPUT_DIR/smart-data-query/references/term-glossary.md" \
+  --question "给老板看下今天经营情况" \
+  --output-dir "/Users/yehong/机器狗资料/cloud-robot-platform/OUTPUT_DIR/smart-data-query/daily-report-output"
+```
+
+Web 端支持这些口语化问法：
+- `给老板看下今天经营情况`
+- `做个停车经营日报给管理层`
+- `哪个场子今天有问题`
+
 ## 缺槽位追问示例
 
 ```bash
@@ -221,7 +242,24 @@ MySQL 已支持真实接入，但运行前需要本机安装 `pymysql` 或 `mysq
 - 异常诊断
 - 车流与利用率分析
 - 管理层综合经营周报
+- 管理层经营日报
+- 管理层独立网页报表
+- LLM 优先的停车经营语义拆解（失败时回退本地规则）
 
 尚未覆盖：
-- 管理层日报模板化输出
 - 基于业务知识库的深层归因链
+- `compare_periods` 当前仅稳定支持 `sales` 数据源
+
+## 报表链路
+
+停车经营日报/周报当前链路如下：
+- 用户自然语言问题 → `scripts/sql_generator.py` 先调用 LLM Planner 做结构化拆解
+- LLM 结果经过 schema 校验与字段归一；失败时回退到最小规则解析
+- `scripts/parking_analyst.py` 生成日报或周报结构化结果
+- `server.py` 持久化报表 payload，返回 `report_url`
+- 前端通过 `/api/report/{report_id}` 渲染独立管理层报表页
+
+说明：
+- 当前只覆盖停车经营域；销售域仍保持原有规则链路。
+- 停车经营 NLP 现为“LLM 主导 + 最小规则兜底”，术语表主要作为提示上下文，不再承担主要分支逻辑。
+- `日报` 默认按“今天/今日”处理；在样例数据中若当天无数据，会回落到最近一个可用日期做演示。

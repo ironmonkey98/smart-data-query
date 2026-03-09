@@ -25,7 +25,13 @@ def run_query(
 ) -> dict:
     schema_text = Path(schema).read_text(encoding="utf-8")
     glossary_text = Path(glossary).read_text(encoding="utf-8")
-    task = normalize_question(question=question, schema_text=schema_text, glossary_text=glossary_text)
+    task = normalize_question(
+        question=question,
+        schema_text=schema_text,
+        glossary_text=glossary_text,
+        llm_base_url=llm_base_url,
+        llm_model=llm_model,
+    )
 
     target_dir = Path(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
