@@ -28,14 +28,13 @@ if [ -z "$ANTHROPIC_AUTH_TOKEN" ] && [ -z "$ANTHROPIC_API_KEY" ]; then
   echo "       export ANTHROPIC_AUTH_TOKEN=sk-..."
 fi
 
-# ── 4. 生成模拟数据（首次运行）────────────────────────────────────────────
-SALES_FILE="$PROJECT_DIR/data/sample_sales.csv"
-SALES_LINES=$(wc -l < "$SALES_FILE" 2>/dev/null || echo 0)
-if [ "$SALES_LINES" -lt 100 ]; then
-  echo "[INFO] 检测到数据量不足，重新生成模拟数据..."
-  python3 "$PROJECT_DIR/data/gen_mock_data.py"
+# ── 4. 检查停车场数据库 ────────────────────────────────────────────────────
+DB_FILE="$PROJECT_DIR/data/sample_parking_ops.db"
+if [ ! -f "$DB_FILE" ]; then
+  echo "[INFO] 未找到停车场数据库，正在从 Excel 重建..."
+  python3 "$PROJECT_DIR/scripts/build_parking_ops_from_excels.py"
 else
-  echo "[INFO] 数据文件就绪（sales: ${SALES_LINES} 行）"
+  echo "[INFO] 停车场数据库就绪（$(du -sh "$DB_FILE" | cut -f1)）"
 fi
 
 # ── 5. 清理上次运行的端口占用 ──────────────────────────────────────────────
