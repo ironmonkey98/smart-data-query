@@ -57,7 +57,7 @@ def _resolve_analysis_profile(task: dict) -> str:
 
 
 def _analyze_revenue(rows: list[dict], task: dict) -> dict:
-    current_rows = _filter_range(rows, task["time_field"], task["time_range"])
+    current_rows = _filter_focus_entities(_filter_range(rows, task["time_field"], task["time_range"]), task)
     baseline_rows, recent_rows = _split_rows_for_revenue_baseline(current_rows, task["entity_field"])
     current_by_lot = _group_by_lot(recent_rows)
     previous_by_lot = _group_by_lot(baseline_rows)
@@ -126,7 +126,7 @@ def _analyze_revenue(rows: list[dict], task: dict) -> dict:
 
 
 def _analyze_anomaly(rows: list[dict], task: dict) -> dict:
-    current_rows = _filter_range(rows, task["time_field"], task["time_range"])
+    current_rows = _filter_focus_entities(_filter_range(rows, task["time_field"], task["time_range"]), task)
     current_by_lot = _group_by_lot(current_rows)
     diagnosis = []
     highest_risk = "low"
@@ -188,7 +188,7 @@ def _analyze_anomaly(rows: list[dict], task: dict) -> dict:
 
 
 def _analyze_flow_efficiency(rows: list[dict], task: dict) -> dict:
-    current_rows = _filter_range(rows, task["time_field"], task["time_range"])
+    current_rows = _filter_focus_entities(_filter_range(rows, task["time_field"], task["time_range"]), task)
     baseline_rows, recent_rows = _split_rows_for_revenue_baseline(current_rows, task["entity_field"])
     current_by_lot = _group_by_lot(recent_rows)
     previous_by_lot = _group_by_lot(baseline_rows)
@@ -270,8 +270,8 @@ def _build_management_report(rows: list[dict], task: dict) -> dict:
         focus_metrics=["entry_count", "occupancy_rate"],
     ))
 
-    current_rows = _filter_range(rows, task["time_field"], task["time_range"])
-    previous_rows = _filter_comparison_range(rows, task["time_field"], task.get("comparison_range"))
+    current_rows = _filter_focus_entities(_filter_range(rows, task["time_field"], task["time_range"]), task)
+    previous_rows = _filter_focus_entities(_filter_comparison_range(rows, task["time_field"], task.get("comparison_range")), task)
     total_revenue = _sum(current_rows, "total_revenue")
     total_entry = _sum(current_rows, "entry_count")
     avg_occupancy = _avg(current_rows, "occupancy_rate")
@@ -355,8 +355,8 @@ def _build_management_report(rows: list[dict], task: dict) -> dict:
 
 
 def _build_period_assessment(rows: list[dict], task: dict) -> dict:
-    current_rows = _filter_range(rows, task["time_field"], task["time_range"])
-    previous_rows = _filter_comparison_range(rows, task["time_field"], task.get("comparison_range"))
+    current_rows = _filter_focus_entities(_filter_range(rows, task["time_field"], task["time_range"]), task)
+    previous_rows = _filter_focus_entities(_filter_comparison_range(rows, task["time_field"], task.get("comparison_range")), task)
     current_total_revenue = _sum(current_rows, "total_revenue")
     current_total_entry = _sum(current_rows, "entry_count")
     current_avg_occupancy = _avg(current_rows, "occupancy_rate")
@@ -554,16 +554,16 @@ def _build_period_assessment_summary(trend: str, reason_factors: list[str]) -> s
 
 
 def _build_management_daily_report(rows: list[dict], task: dict) -> dict:
-    current_rows = _filter_range(rows, task["time_field"], task["time_range"])
+    current_rows = _filter_focus_entities(_filter_range(rows, task["time_field"], task["time_range"]), task)
     if not current_rows:
-        current_rows = _latest_day_rows(rows, task["time_field"])
+        current_rows = _filter_focus_entities(_latest_day_rows(rows, task["time_field"]), task)
     current_date = max(_to_date(row[task["time_field"]]) for row in current_rows)
     previous_date = current_date - timedelta(days=1)
-    previous_rows = [
+    previous_rows = _filter_focus_entities([
         row
         for row in rows
         if _to_date(row[task["time_field"]]) == previous_date
-    ]
+    ], task)
 
     current_by_lot = _group_by_lot(current_rows)
     previous_by_lot = _group_by_lot(previous_rows)
@@ -707,6 +707,19 @@ def _filter_comparison_range(rows: list[dict], field: str, time_range: dict | No
     if not time_range or not time_range.get("start") or not time_range.get("end"):
         return []
     return _filter_range(rows, field, time_range)
+
+
+def _filter_focus_entities(rows: list[dict], task: dict) -> list[dict]:
+    focus_entities = task.get("focus_entities") or []
+    if not focus_entities:
+        semantic_plan = task.get("semantic_plan") or {}
+        focus_entities = semantic_plan.get("focus_entities") or []
+    if not focus_entities:
+        return rows
+    allowed = {str(item).strip() for item in focus_entities if str(item).strip()}
+    if not allowed:
+        return rows
+    return [row for row in rows if str(row.get("parking_lot", "")).strip() in allowed]
 
 
 def _to_date(value) -> date:

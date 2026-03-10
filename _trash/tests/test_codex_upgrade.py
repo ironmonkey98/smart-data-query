@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import server
 from scripts import sql_generator
@@ -10,6 +12,7 @@ from scripts.connect_db import load_dataset
 from scripts.chart_render import render_svg_chart
 from scripts.llm_enhancer import enhance_analysis, handle_follow_up
 from scripts.parking_analyst import diagnose_parking_operation
+from scripts.parking_skill_runtime import execute_skill
 
 
 class DetectTimeRangeTests(unittest.TestCase):
@@ -258,6 +261,111 @@ class DetectTimeRangeTests(unittest.TestCase):
         self.assertEqual(result["time_range"]["end"], "2025-02-28")
         self.assertFalse(result["time_was_defaulted"])
 
+    def test_normalize_question_uses_llm_planner_before_rule_domain_gate(self) -> None:
+        result = sql_generator.normalize_question(
+            "去年 2 月高林的营收情况，哪天最差，为什么，哪天是有人没交钱跑了吗",
+            schema_text="schema",
+            glossary_text="glossary",
+            planner=lambda *_args, **_kwargs: {
+                "domain": "parking_ops",
+                "business_goal": "management_reporting",
+                "analysis_job": "period_assessment",
+                "decision_scope": "operations",
+                "deliverable": "summary",
+                "time_scope": {
+                    "kind": "relative_year_month",
+                    "preset": None,
+                    "anchor": {"relative_year": -1, "month": 2},
+                    "start": "2025-02-01",
+                    "end": "2025-02-28",
+                },
+                "focus_entities": ["厦门高林居住区高林一里 A1-1地块商业中心"],
+                "focus_dimensions": ["parking_lot"],
+                "focus_metrics": ["total_revenue", "payment_failure_rate", "abnormal_open_count"],
+                "query_profile": "parking_daily_overview_join",
+                "sub_questions": [
+                    {
+                        "kind": "worst_day",
+                        "query_profile": "parking_daily_overview_join",
+                    },
+                    {
+                        "kind": "suspected_fare_evasion",
+                        "query_profile": "payment_passage_reconciliation_by_date",
+                    },
+                ],
+                "implicit_requirements": ["comparison_required", "reason_explanation"],
+                "missing_information": [],
+            },
+        )
+
+        self.assertEqual(result["intent"], "parking_period_assessment")
+        self.assertEqual(result["planner_mode"], "llm")
+        self.assertEqual(result["focus_entities"], ["厦门高林居住区高林一里 A1-1地块商业中心"])
+        self.assertEqual(result["semantic_plan"]["sub_questions"][1]["kind"], "suspected_fare_evasion")
+        self.assertEqual(result["query_profile"], "parking_daily_overview_join")
+
+    def test_failed_planner_does_not_silently_default_last_year_question(self) -> None:
+        result = sql_generator.normalize_question(
+            "哪个场子去年有问题",
+            schema_text="schema",
+            glossary_text="glossary",
+            planner=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("planner_down")),
+        )
+
+        self.assertTrue(result["needs_clarification"])
+        self.assertIn("语义规划", result["clarifying_question"])
+        self.assertFalse(result["time_was_defaulted"])
+        self.assertEqual(result["planner_mode"], "planner_error")
+
+    def test_failed_planner_keeps_complex_single_lot_question_in_parking_domain(self) -> None:
+        result = sql_generator.normalize_question(
+            "高林去年 2 月哪天收入最差，为什么",
+            schema_text="schema",
+            glossary_text="glossary",
+            planner=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("planner_down")),
+        )
+
+        self.assertEqual(result["domain"], "parking_ops")
+        self.assertTrue(result["intent"].startswith("parking_"))
+        self.assertTrue(result["needs_clarification"])
+        self.assertIn("语义规划", result["clarifying_question"])
+
+    def test_normalize_question_uses_anthropic_default_planner_when_available(self) -> None:
+        planner_result = {
+            "domain": "parking_ops",
+            "business_goal": "risk_detection",
+            "analysis_job": "anomaly_focus",
+            "decision_scope": "operations",
+            "deliverable": None,
+            "time_scope": {
+                "kind": "preset",
+                "preset": "last_year",
+                "anchor": {"relative_year": -1},
+                "start": "2025-01-01",
+                "end": "2025-12-31",
+            },
+            "focus_entities": [],
+            "focus_dimensions": ["parking_lot"],
+            "focus_metrics": ["payment_failure_rate", "abnormal_open_count"],
+            "query_profile": "parking_daily_overview_join",
+            "sub_questions": [],
+            "implicit_requirements": [],
+            "missing_information": [],
+        }
+
+        with patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "test-token"}, clear=False):
+            with patch.object(sql_generator, "build_default_parking_planner", return_value=lambda *_args, **_kwargs: planner_result):
+                result = sql_generator.normalize_question(
+                    "哪个场子去年有问题",
+                    schema_text="schema",
+                    glossary_text="glossary",
+                )
+
+        self.assertEqual(result["intent"], "parking_anomaly_diagnosis")
+        self.assertEqual(result["planner_mode"], "llm")
+        self.assertEqual(result["time_range"]["start"], "2025-01-01")
+        self.assertEqual(result["time_range"]["end"], "2025-12-31")
+
     def test_relational_reconciliation_question_maps_to_date_join_profile(self) -> None:
         result = sql_generator.normalize_question(
             "把收费流水和通行记录联起来看，找出有收入但没通行的日期",
@@ -412,6 +520,106 @@ class SemanticExecutionTests(unittest.TestCase):
         self.assertEqual(analysis["focus_lots"][0]["topic"], "经营异常")
         self.assertIn("风险异常", analysis["executive_summary"][1])
 
+    def test_execute_skill_uses_precomputed_task_instead_of_reparsing_question(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = execute_skill(
+                question="完全不相关的句子",
+                task={
+                    "intent": "parking_period_assessment",
+                    "domain": "parking_ops",
+                    "query_profile": "parking_daily_overview_join",
+                    "entity_field": "parking_lot",
+                    "time_field": "stat_date",
+                    "time_granularity": "day",
+                    "time_range": {"preset": "last_year_month", "start": "2025-02-01", "end": "2025-02-28"},
+                    "comparison_range": {"preset": "previous_period", "start": "2025-01-04", "end": "2025-01-31"},
+                    "focus_metrics": ["total_revenue", "payment_failure_rate"],
+                    "focus_entities": ["厦门高林居住区高林一里 A1-1地块商业中心"],
+                    "metric": {"field": "total_revenue", "label": "总收入", "aggregation": "sum"},
+                    "chart": {"type": "line", "x_field": "stat_date", "y_field": "总收入", "series_field": "parking_lot"},
+                    "semantic_plan": {
+                        "domain": "parking_ops",
+                        "business_goal": "management_reporting",
+                        "analysis_job": "period_assessment",
+                        "decision_scope": "operations",
+                        "deliverable": "summary",
+                        "time_scope": {
+                            "kind": "relative_year_month",
+                            "preset": None,
+                            "anchor": {"relative_year": -1, "month": 2},
+                            "start": "2025-02-01",
+                            "end": "2025-02-28",
+                        },
+                        "focus_entities": ["厦门高林居住区高林一里 A1-1地块商业中心"],
+                        "focus_dimensions": ["parking_lot"],
+                        "focus_metrics": ["total_revenue", "payment_failure_rate"],
+                        "missing_information": [],
+                    },
+                },
+                source_type="sqlite",
+                source_path="/Users/yehong/smart-data-query 3/data/sample_parking_ops.db",
+                schema_path="/Users/yehong/smart-data-query 3/references/db-schema.md",
+                glossary_path="/Users/yehong/smart-data-query 3/references/term-glossary.md",
+                output_dir=temp_dir,
+            )
+
+        self.assertEqual(payload["task"]["intent"], "parking_period_assessment")
+        self.assertEqual(payload["analysis"]["analysis_type"], "period_assessment")
+
+    def test_execute_skill_builds_sub_results_for_compound_period_question(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = execute_skill(
+                question="去年 2 月高林的营收情况，哪天最差，为什么，哪天是有人没交钱跑了吗",
+                task={
+                    "intent": "parking_period_assessment",
+                    "domain": "parking_ops",
+                    "query_profile": "parking_daily_overview_join",
+                    "entity_field": "parking_lot",
+                    "time_field": "stat_date",
+                    "time_granularity": "day",
+                    "time_range": {"preset": "last_year_month", "start": "2025-02-01", "end": "2025-02-28"},
+                    "comparison_range": {"preset": "previous_period", "start": "2025-01-04", "end": "2025-01-31"},
+                    "focus_metrics": ["total_revenue", "payment_failure_rate", "abnormal_open_count"],
+                    "focus_entities": ["厦门高林居住区高林一里 A1-1地块商业中心"],
+                    "metric": {"field": "total_revenue", "label": "总收入", "aggregation": "sum"},
+                    "chart": {"type": "line", "x_field": "stat_date", "y_field": "总收入", "series_field": "parking_lot"},
+                    "semantic_plan": {
+                        "domain": "parking_ops",
+                        "business_goal": "management_reporting",
+                        "analysis_job": "period_assessment",
+                        "decision_scope": "operations",
+                        "deliverable": "summary",
+                        "time_scope": {
+                            "kind": "relative_year_month",
+                            "preset": None,
+                            "anchor": {"relative_year": -1, "month": 2},
+                            "start": "2025-02-01",
+                            "end": "2025-02-28",
+                        },
+                        "focus_entities": ["厦门高林居住区高林一里 A1-1地块商业中心"],
+                        "focus_dimensions": ["parking_lot"],
+                        "focus_metrics": ["total_revenue", "payment_failure_rate", "abnormal_open_count"],
+                        "query_profile": "parking_daily_overview_join",
+                        "sub_questions": [
+                            {"kind": "worst_day", "query_profile": "parking_daily_overview_join"},
+                            {"kind": "suspected_fare_evasion", "query_profile": "payment_passage_reconciliation_by_date"},
+                        ],
+                        "implicit_requirements": ["comparison_required", "reason_explanation"],
+                        "missing_information": [],
+                    },
+                },
+                source_type="sqlite",
+                source_path="/Users/yehong/smart-data-query 3/data/sample_parking_ops.db",
+                schema_path="/Users/yehong/smart-data-query 3/references/db-schema.md",
+                glossary_path="/Users/yehong/smart-data-query 3/references/term-glossary.md",
+                output_dir=temp_dir,
+            )
+
+        self.assertIn("sub_results", payload)
+        self.assertEqual(payload["sub_results"][0]["kind"], "worst_day")
+        self.assertEqual(payload["sub_results"][1]["kind"], "suspected_fare_evasion")
+        self.assertTrue(any("最差" in line for line in payload.get("runtime_summary", [])))
+
     def test_management_report_uses_executive_clean_chart_style(self) -> None:
         task = {
             "intent": "parking_management_report",
@@ -435,6 +643,33 @@ class SemanticExecutionTests(unittest.TestCase):
 
         self.assertEqual(analysis["chart_spec"]["type"], "line")
         self.assertEqual(analysis["chart_spec"]["style_preset"], "executive_clean")
+
+    def test_period_assessment_respects_focus_entities(self) -> None:
+        task = {
+            "intent": "parking_period_assessment",
+            "domain": "parking_ops",
+            "entity_field": "parking_lot",
+            "time_field": "stat_date",
+            "time_range": {"preset": "last_7_days", "start": "2025-12-25", "end": "2025-12-31"},
+            "comparison_range": {"preset": "previous_period", "start": "2025-12-18", "end": "2025-12-24"},
+            "focus_metrics": ["total_revenue"],
+            "focus_entities": ["厦门高林居住区高林一里 A1-1地块商业中心"],
+            "semantic_plan": {
+                "business_goal": "management_reporting",
+                "analysis_job": "period_assessment",
+                "decision_scope": "operations",
+                "deliverable": "summary",
+                "focus_metrics": ["total_revenue"],
+                "focus_entities": ["厦门高林居住区高林一里 A1-1地块商业中心"],
+            },
+        }
+
+        analysis = diagnose_parking_operation(self.rows, task)
+
+        self.assertTrue(analysis["chart_rows"])
+        self.assertTrue(
+            all(row["parking_lot"] == "厦门高林居住区高林一里 A1-1地块商业中心" for row in analysis["chart_rows"])
+        )
         self.assertEqual(analysis["chart_spec"]["chart_family"], "trend")
 
     def test_management_report_uses_comparison_summary_when_previous_period_exists(self) -> None:

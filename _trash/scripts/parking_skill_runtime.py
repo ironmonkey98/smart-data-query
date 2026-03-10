@@ -7,20 +7,21 @@ from smart_query import run_query
 from sql_generator import normalize_question
 
 
-def detect_parking_task(question: str, schema_path: str, glossary_path: str) -> dict:
+def detect_parking_task(question: str, schema_path: str, glossary_path: str, planner=None) -> dict:
     schema_text = Path(schema_path).read_text(encoding="utf-8")
     glossary_text = Path(glossary_path).read_text(encoding="utf-8")
     return normalize_question(
         question=question,
         schema_text=schema_text,
         glossary_text=glossary_text,
+        planner=planner,
     )
 
 
-def should_handle_with_runtime(question: str, schema_path: str, glossary_path: str) -> bool:
+def should_handle_with_runtime(question: str, schema_path: str, glossary_path: str, planner=None) -> bool:
     if "分析计划" in question or ("计划" in question and "查询" not in question and "报告" not in question):
         return False
-    task = detect_parking_task(question, schema_path, glossary_path)
+    task = detect_parking_task(question, schema_path, glossary_path, planner=planner)
     return str(task.get("domain")) == "parking_ops" or str(task.get("intent", "")).startswith("parking_")
 
 
@@ -71,7 +72,12 @@ def execute_skill(
         schema=schema_path,
         glossary=glossary_path,
         output_dir=output_dir,
+        task=task,
     )
+    sub_results = _build_sub_results(task, payload, source_type, source_path, schema_path, glossary_path, output_dir)
+    if sub_results:
+        payload["sub_results"] = sub_results
+        payload["runtime_summary"] = _build_runtime_summary(payload, sub_results)
     return payload
 
 
@@ -102,7 +108,10 @@ def build_tool_result(payload: dict, chart_svg: str) -> dict:
     if payload.get("needs_clarification"):
         return {**result, "_chart_svg": chart_svg}
 
-    if "result" in payload:
+    if payload.get("runtime_summary"):
+        result["summary"] = payload["runtime_summary"]
+        result["rows_sample"] = payload.get("rows_sample", [])
+    elif "result" in payload:
         result["summary"] = payload.get("summary", [])
         result["rows_sample"] = payload["result"].get("rows", [])
     elif "analysis" in payload:
@@ -157,3 +166,126 @@ def decide_next_action(result: dict) -> tuple[str, str]:
 
 def dump_payload(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _build_sub_results(
+    task: dict,
+    payload: dict,
+    source_type: str,
+    source_path: str,
+    schema_path: str,
+    glossary_path: str,
+    output_dir: str,
+) -> list[dict]:
+    semantic_plan = task.get("semantic_plan") or {}
+    sub_questions = semantic_plan.get("sub_questions") or task.get("sub_questions") or []
+    if not sub_questions:
+        return []
+
+    sub_results = []
+    for index, item in enumerate(sub_questions):
+        kind = item.get("kind")
+        if kind == "worst_day":
+            worst_day_result = _derive_worst_day_result(task, payload)
+            if worst_day_result:
+                sub_results.append(worst_day_result)
+            continue
+        if kind == "suspected_fare_evasion":
+            sub_task = _build_suspected_fare_evasion_task(task, item)
+            sub_output_dir = str(Path(output_dir) / f"sub-{index}-{kind}")
+            sub_payload = run_query(
+                question=item.get("question") or kind,
+                source_type=source_type,
+                source=source_path,
+                schema=schema_path,
+                glossary=glossary_path,
+                output_dir=sub_output_dir,
+                task=sub_task,
+            )
+            sub_results.append(_summarize_fare_evasion_result(sub_payload))
+    return sub_results
+
+
+def _derive_worst_day_result(task: dict, payload: dict) -> dict | None:
+    rows = payload.get("rows_sample") or []
+    if not rows:
+        return None
+    focus_entities = task.get("focus_entities") or []
+    if focus_entities:
+        rows = [row for row in rows if row.get("parking_lot") in focus_entities]
+    if not rows:
+        return None
+    worst_row = min(rows, key=lambda row: float(row.get("总收入", row.get("total_revenue", 0)) or 0))
+    revenue = float(worst_row.get("总收入", worst_row.get("total_revenue", 0)) or 0)
+    lot_name = worst_row.get("parking_lot", "目标车场")
+    return {
+        "kind": "worst_day",
+        "summary": [f"{lot_name} 在 {worst_row['stat_date']} 营收最差，当日收入 {revenue:.0f}。"],
+        "data": {
+            "parking_lot": lot_name,
+            "stat_date": worst_row.get("stat_date"),
+            "total_revenue": revenue,
+        },
+    }
+
+
+def _build_suspected_fare_evasion_task(task: dict, item: dict) -> dict:
+    return {
+        **task,
+        "intent": "parking_relational_query",
+        "query_profile": item.get("query_profile") or "payment_passage_reconciliation_by_date",
+        "metric": {"field": "total_revenue", "label": "总收入", "aggregation": "sum"},
+        "constraints": {
+            **task.get("constraints", {}),
+            **item.get("constraints", {}),
+            "mismatch_type": "passage_without_payment",
+        },
+        "report_type": None,
+        "chart": {
+            "type": "bar",
+            "x_field": "stat_date",
+            "y_field": "总收入",
+            "series_field": "parking_lot",
+        },
+        "semantic_plan": {
+            **(task.get("semantic_plan") or {}),
+            "business_goal": "risk_detection",
+            "analysis_job": "anomaly_focus",
+            "query_profile": item.get("query_profile") or "payment_passage_reconciliation_by_date",
+        },
+        "sub_questions": [],
+    }
+
+
+def _summarize_fare_evasion_result(sub_payload: dict) -> dict:
+    rows = (sub_payload.get("result") or {}).get("rows") or []
+    if not rows:
+        return {
+            "kind": "suspected_fare_evasion",
+            "summary": ["当前时间窗口内未发现足够证据支持疑似未缴费离场。"],
+            "data": {},
+        }
+    top_row = max(rows, key=lambda row: float(row.get("entry_count", 0) or 0))
+    return {
+        "kind": "suspected_fare_evasion",
+        "summary": [
+            f"{top_row['parking_lot']} 在 {top_row['stat_date']} 出现 {top_row['entry_count']:.0f} 笔“有通行无收入”记录，需作为疑似未缴费离场优先复核。"
+        ],
+        "data": top_row,
+    }
+
+
+def _build_runtime_summary(payload: dict, sub_results: list[dict]) -> list[str]:
+    summary_lines = []
+    summary_lines.extend(payload.get("executive_summary", []))
+    narrative = payload.get("narrative", {})
+    if isinstance(narrative, dict):
+        narrative_text = narrative.get("narrative")
+        if narrative_text:
+            summary_lines.append(narrative_text)
+    elif isinstance(narrative, str) and narrative:
+        summary_lines.append(narrative)
+
+    for item in sub_results:
+        summary_lines.extend(item.get("summary", []))
+    return [line for line in summary_lines if line]

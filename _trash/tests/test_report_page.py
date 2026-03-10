@@ -155,6 +155,51 @@ class ReportPageMarkupTests(unittest.TestCase):
 
 
 class ReflectStreamTests(unittest.TestCase):
+    def test_chat_stream_routes_complex_single_lot_question_to_runtime_with_planner(self) -> None:
+        async def collect_events() -> list[dict]:
+            events = []
+            async for chunk in server._chat_stream(
+                "runtime-single-lot-complex-test",
+                "高林去年 2 月哪天收入最差，为什么",
+            ):
+                for line in chunk.splitlines():
+                    if line.startswith("data: "):
+                        events.append(json.loads(line[6:]))
+            return events
+
+        planner = lambda *_args, **_kwargs: {
+            "domain": "parking_ops",
+            "business_goal": "management_reporting",
+            "analysis_job": "period_assessment",
+            "decision_scope": "operations",
+            "deliverable": "summary",
+            "time_scope": {
+                "kind": "relative_year_month",
+                "preset": None,
+                "anchor": {"relative_year": -1, "month": 2},
+                "start": "2025-02-01",
+                "end": "2025-02-28",
+            },
+            "focus_entities": ["厦门高林居住区高林一里 A1-1地块商业中心"],
+            "focus_dimensions": ["parking_lot"],
+            "focus_metrics": ["total_revenue"],
+            "query_profile": "parking_daily_overview_join",
+            "sub_questions": [
+                {"kind": "worst_day", "query_profile": "parking_daily_overview_join"},
+            ],
+            "implicit_requirements": ["reason_explanation"],
+            "missing_information": [],
+        }
+
+        with patch.object(server, "_get_parking_runtime_planner", return_value=planner):
+            events = asyncio.run(collect_events())
+
+        step_events = [event for event in events if event["type"] == "step"]
+        self.assertEqual([event["phase"] for event in step_events], ["think", "act", "check", "decide"])
+        self.assertIn("parking_period_assessment_skill", step_events[0]["title"])
+        text_event = next(event for event in events if event["type"] == "text_delta")
+        self.assertIn("最差", text_event["content"])
+
     def test_chat_stream_routes_parking_anomaly_question_to_skill_runtime(self) -> None:
         async def collect_events() -> list[dict]:
             events = []
@@ -193,13 +238,68 @@ class ReflectStreamTests(unittest.TestCase):
                         events.append(json.loads(line[6:]))
             return events
 
-        events = asyncio.run(collect_events())
+        planner = lambda *_args, **_kwargs: {
+            "domain": "parking_ops",
+            "business_goal": "management_reporting",
+            "analysis_job": "period_assessment",
+            "decision_scope": "operations",
+            "deliverable": "summary",
+            "time_scope": {
+                "kind": "relative_year_month",
+                "preset": None,
+                "anchor": {"relative_year": -1, "month": 2},
+                "start": "2025-02-01",
+                "end": "2025-02-28",
+            },
+            "focus_entities": [],
+            "focus_dimensions": ["parking_lot"],
+            "focus_metrics": ["total_revenue", "entry_count", "occupancy_rate"],
+            "query_profile": "parking_daily_overview_join",
+            "sub_questions": [],
+            "implicit_requirements": ["comparison_required", "reason_explanation"],
+            "missing_information": [],
+        }
+
+        with patch.object(server, "_get_parking_runtime_planner", return_value=planner):
+            events = asyncio.run(collect_events())
 
         step_events = [event for event in events if event["type"] == "step"]
         self.assertEqual([event["phase"] for event in step_events], ["think", "act", "check", "decide"])
         self.assertIn("parking_period_assessment_skill", step_events[0]["title"])
         text_event = next(event for event in events if event["type"] == "text_delta")
         self.assertTrue(any(token in text_event["content"] for token in ("好转", "变坏", "分化")))
+
+    def test_runtime_gate_accepts_llm_detected_complex_parking_question(self) -> None:
+        result = server.should_handle_with_runtime(
+            "去年 2 月高林的营收情况，哪天最差，为什么，哪天是有人没交钱跑了吗",
+            server.DATA_SOURCES["parking_ops"]["schema_path"],
+            server.DATA_SOURCES["parking_ops"]["glossary_path"],
+            planner=lambda *_args, **_kwargs: {
+                "domain": "parking_ops",
+                "business_goal": "management_reporting",
+                "analysis_job": "period_assessment",
+                "decision_scope": "operations",
+                "deliverable": "summary",
+                "time_scope": {
+                    "kind": "relative_year_month",
+                    "preset": None,
+                    "anchor": {"relative_year": -1, "month": 2},
+                    "start": "2025-02-01",
+                    "end": "2025-02-28",
+                },
+                "focus_entities": ["厦门高林居住区高林一里 A1-1地块商业中心"],
+                "focus_dimensions": ["parking_lot"],
+                "focus_metrics": ["total_revenue"],
+                "query_profile": "parking_daily_overview_join",
+                "sub_questions": [
+                    {"kind": "suspected_fare_evasion", "query_profile": "payment_passage_reconciliation_by_date"},
+                ],
+                "implicit_requirements": ["comparison_required", "reason_explanation"],
+                "missing_information": [],
+            },
+        )
+
+        self.assertTrue(result)
 
     def test_chat_stream_clarifies_ambiguous_relational_query_before_execution(self) -> None:
         async def collect_events() -> list[dict]:

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 from datetime import date, timedelta
+from pathlib import Path
 
-from llm_enhancer import plan_parking_question
+from llm_enhancer import build_default_parking_planner
 
 
 METRIC_ALIASES = {
@@ -46,6 +48,18 @@ def normalize_question(
     llm_base_url: str | None = None,
     llm_model: str | None = None,
 ) -> dict:
+    parking_task = _normalize_parking_question(
+        question=question,
+        schema_text=schema_text,
+        glossary_text=glossary_text,
+        planner=planner,
+        llm_base_url=llm_base_url,
+        llm_model=llm_model,
+        allow_rule_fallback=False,
+    )
+    if parking_task is not None:
+        return parking_task
+
     if _is_parking_question(question):
         return _normalize_parking_question(
             question=question,
@@ -54,6 +68,7 @@ def normalize_question(
             planner=planner,
             llm_base_url=llm_base_url,
             llm_model=llm_model,
+            allow_rule_fallback=True,
         )
 
     metric_field, metric_label = _detect_metric(question, glossary_text)
@@ -255,8 +270,9 @@ def _normalize_parking_question(
     planner=None,
     llm_base_url: str | None = None,
     llm_model: str | None = None,
-) -> dict:
-    semantic_plan = _plan_parking_question(
+    allow_rule_fallback: bool = True,
+) -> dict | None:
+    semantic_plan, planner_state = _plan_parking_question(
         question=question,
         schema_text=schema_text,
         glossary_text=glossary_text,
@@ -275,9 +291,23 @@ def _normalize_parking_question(
         task["semantic_plan"] = semantic_plan
         return task
 
+    if planner_state == "failed" and _should_clarify_after_planner_failure(question):
+        return _build_planner_failure_task(question, schema_text, glossary_text)
+
+    if not allow_rule_fallback:
+        return None
+
     task = _build_rule_parking_task(question, schema_text, glossary_text)
-    task["planner_mode"] = "rule_fallback" if planner or os.getenv("OPENAI_API_KEY") else "rule"
+    task["planner_mode"] = "planner_error" if planner_state == "failed" else ("rule_fallback" if planner_state == "available" else "rule")
     task["semantic_plan"] = _build_rule_semantic_plan(question, task)
+    if planner_state == "failed" and _should_clarify_after_planner_failure(question, task):
+        task["needs_clarification"] = True
+        task["clarifying_question"] = _planner_failure_clarification_question(question)
+        task["time_was_defaulted"] = False
+        task["time_default_reason"] = None
+        task["semantic_plan"]["missing_information"] = sorted(
+            set(task["semantic_plan"].get("missing_information", []) + ["time_scope"])
+        )
     return task
 
 
@@ -288,30 +318,122 @@ def _plan_parking_question(
     planner,
     llm_base_url: str | None,
     llm_model: str | None,
-) -> dict | None:
+) -> tuple[dict | None, str]:
     planner_func = planner
-    if planner_func is None and os.getenv("OPENAI_API_KEY"):
-        planner_func = lambda q, s, g: plan_parking_question(
-            question=q,
-            schema_text=s,
-            glossary_text=g,
-            base_url=llm_base_url,
-            model=llm_model,
+    if planner_func is None:
+        planner_func = build_default_parking_planner(
+            entity_context=_load_parking_entity_context(),
+            openai_base_url=llm_base_url,
+            openai_model=llm_model,
         )
     if planner_func is None:
-        return None
+        return None, "unavailable"
 
     try:
         plan = planner_func(question, schema_text, glossary_text)
     except Exception:
-        return None
+        return None, "failed"
     if not isinstance(plan, dict):
-        return None
-    return _normalize_semantic_plan(plan)
+        return None, "failed"
+    return _normalize_semantic_plan(plan), "available"
+
+
+def _load_parking_entity_context() -> str:
+    db_path = Path(__file__).resolve().parent.parent / "data" / "sample_parking_ops.db"
+    if not db_path.exists():
+        return ""
+    try:
+        connection = sqlite3.connect(str(db_path))
+        try:
+            rows = connection.execute(
+                "SELECT parking_lot_name FROM parking_lots ORDER BY parking_lot_name"
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return ""
+    names = [str(row[0]).strip() for row in rows if row and str(row[0]).strip()]
+    return "\n".join(names)
+
+
+def _build_planner_failure_task(question: str, schema_text: str, glossary_text: str) -> dict:
+    task = _build_rule_parking_task(question, schema_text, glossary_text)
+    if not str(task.get("intent", "")).startswith("parking_"):
+        task["intent"] = _infer_parking_intent_from_failed_planner(question)
+        metric_field, metric_label = _resolve_parking_metric(task["intent"], glossary_text)
+        task["metric"] = {
+            "field": metric_field,
+            "label": metric_label,
+            "aggregation": "sum",
+        }
+        task["query_profile"] = _resolve_parking_query_profile(question, task["intent"], task.get("focus_metrics", []))
+        task["relations"] = _build_parking_relations(task["query_profile"])
+        task["entities"] = _build_parking_entities(task["query_profile"], task.get("focus_entities", []))
+        task["chart"] = _resolve_parking_chart(task["query_profile"], metric_label)
+        task["report_type"] = _resolve_report_type(task["intent"], None)
+    task["domain"] = "parking_ops"
+    task["planner_mode"] = "planner_error"
+    task["needs_clarification"] = True
+    task["clarifying_question"] = _planner_failure_clarification_question(question)
+    task["time_was_defaulted"] = False
+    task["time_default_reason"] = None
+    task["semantic_plan"] = _build_rule_semantic_plan(question, task)
+    task["semantic_plan"]["missing_information"] = sorted(
+        set(task["semantic_plan"].get("missing_information", []) + ["time_scope"])
+    )
+    return task
+
+
+def _infer_parking_intent_from_failed_planner(question: str) -> str:
+    if any(token in question for token in ("有问题", "异常", "风险", "不正常")):
+        return "parking_anomaly_diagnosis"
+    if any(token in question for token in ("收入", "营收", "最差", "最好")):
+        return "parking_period_assessment"
+    if any(token in question for token in ("老板", "管理层", "日报", "周报", "报告", "简报", "情况", "经营")):
+        return "parking_management_report"
+    return "parking_query_skill"
+
+
+def _planner_failure_clarification_question(question: str) -> str:
+    if any(token in question for token in ("去年", "前年", "今年", "本年")):
+        return "当前语义规划暂时不可用。请重试，或先明确时间口径，例如“去年全年”或“去年2月”。"
+    return "当前语义规划暂时不可用。请重试，或补充更明确的时间范围、车场名称和判断口径。"
+
+
+def _should_clarify_after_planner_failure(question: str, task: dict | None = None) -> bool:
+    if any(token in question for token in ("去年", "前年", "今年", "上半年", "下半年")):
+        return True
+    if not _is_parking_question(question) and _question_mentions_parking_entity(question):
+        return True
+    if task and task.get("time_was_defaulted") and any(token in question for token in ("哪天", "为什么", "最差", "最好")):
+        return True
+    return False
+
+
+def _question_mentions_parking_entity(question: str) -> bool:
+    entity_context = _load_parking_entity_context()
+    if not entity_context:
+        return False
+    compact_question = re.sub(r"\s+", "", question)
+    tokens = {
+        token
+        for token in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,6}", compact_question)
+        if token not in {"去年", "前年", "今年", "收入", "营收", "情况", "为什么", "哪天", "最差", "最好", "停车", "车场", "场子", "问题", "经营"}
+    }
+    if not tokens:
+        return False
+    for lot_name in entity_context.splitlines():
+        normalized_name = re.sub(r"\s+", "", lot_name)
+        if any(token in normalized_name for token in tokens):
+            return True
+    return False
 
 
 def _normalize_semantic_plan(plan: dict) -> dict | None:
-    if plan.get("domain") not in {None, "", "parking_ops"}:
+    domain = plan.get("domain")
+    if domain in {"non_parking", "sales"}:
+        return None
+    if domain not in {None, "", "parking_ops"}:
         return None
     if plan.get("business_goal") not in SEMANTIC_BUSINESS_GOALS:
         return None
@@ -329,6 +451,8 @@ def _normalize_semantic_plan(plan: dict) -> dict | None:
         "focus_entities": _coerce_focus_entities(plan.get("focus_entities")),
         "focus_dimensions": _normalize_focus_dimensions(plan.get("focus_dimensions")),
         "focus_metrics": [metric for metric in plan.get("focus_metrics", []) if isinstance(metric, str)],
+        "query_profile": _normalize_query_profile(plan.get("query_profile")),
+        "sub_questions": _normalize_sub_questions(plan.get("sub_questions")),
         "constraints": _normalize_constraints(plan.get("constraints")),
         "implicit_requirements": _normalize_string_list(plan.get("implicit_requirements")),
         "missing_information": _normalize_string_list(plan.get("missing_information")),
@@ -371,6 +495,41 @@ def _normalize_constraints(values) -> dict:
     }
 
 
+def _normalize_query_profile(value) -> str | None:
+    valid_profiles = {
+        "parking_daily_overview_join",
+        "payment_passage_reconciliation_by_date",
+        "payment_passage_reconciliation_by_plate",
+        "lot_capacity_efficiency_ranking",
+        "payment_method_risk_breakdown",
+    }
+    if isinstance(value, str) and value in valid_profiles:
+        return value
+    return None
+
+
+def _normalize_sub_questions(values) -> list[dict]:
+    if not isinstance(values, list):
+        return []
+    normalized = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind")
+        if not isinstance(kind, str) or not kind.strip():
+            continue
+        normalized.append(
+            {
+                "kind": kind.strip(),
+                "query_profile": _normalize_query_profile(item.get("query_profile")),
+                "question": item.get("question") if isinstance(item.get("question"), str) else None,
+                "focus_metrics": _normalize_string_list(item.get("focus_metrics")),
+                "constraints": _normalize_constraints(item.get("constraints")),
+            }
+        )
+    return normalized
+
+
 def _map_semantic_plan_to_task(
     semantic_plan: dict,
     question: str,
@@ -388,6 +547,7 @@ def _map_semantic_plan_to_task(
         time_range=time_range,
         focus_metrics=focus_metrics,
         focus_entities=semantic_plan.get("focus_entities", []),
+        query_profile_override=semantic_plan.get("query_profile"),
     )
     task["report_type"] = _resolve_report_type(intent, semantic_plan.get("deliverable"))
     if "time_scope" in semantic_plan.get("missing_information", []) and _requires_explicit_time_range(question):
@@ -399,6 +559,7 @@ def _map_semantic_plan_to_task(
         **task.get("constraints", {}),
         **semantic_plan.get("constraints", {}),
     }
+    task["sub_questions"] = semantic_plan.get("sub_questions", [])
     return task
 
 
@@ -439,6 +600,8 @@ def _build_rule_semantic_plan(question: str, task: dict) -> dict:
         "focus_entities": task.get("focus_entities", []),
         "focus_dimensions": ["parking_lot"],
         "focus_metrics": task.get("focus_metrics", []),
+        "query_profile": task.get("query_profile"),
+        "sub_questions": task.get("sub_questions", []),
         "constraints": task.get("constraints", {}),
         "implicit_requirements": ["summary_first"] if intent in {"parking_management_report", "parking_management_daily_report"} else [],
         "missing_information": missing_information,
@@ -484,6 +647,7 @@ def _build_parking_task(
     time_range: dict,
     focus_metrics: list[str],
     focus_entities: list[str],
+    query_profile_override: str | None = None,
 ) -> dict:
     time_range, time_was_defaulted, time_default_reason = _finalize_parking_time_range(question, intent, time_range)
     if intent == "parking_management_daily_report" and time_range["preset"] == "all":
@@ -491,7 +655,7 @@ def _build_parking_task(
         time_range = {"preset": "today", "start": today, "end": today}
 
     metric_field, metric_label = _resolve_parking_metric(intent, glossary_text)
-    query_profile = _resolve_parking_query_profile(question, intent, focus_metrics)
+    query_profile = query_profile_override or _resolve_parking_query_profile(question, intent, focus_metrics)
     relations = _build_parking_relations(query_profile)
     entities = _build_parking_entities(query_profile, focus_entities)
     constraints = _build_parking_constraints(question, query_profile)
@@ -514,6 +678,7 @@ def _build_parking_task(
         "comparison_range": _build_comparison_range(time_range),
         "focus_metrics": focus_metrics,
         "focus_entities": focus_entities,
+        "sub_questions": [],
         "chart": {
             "type": "line",
             "x_field": "stat_date",

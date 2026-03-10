@@ -2,8 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+from dotenv import load_dotenv
+
+try:
+    import anthropic
+except ImportError:  # pragma: no cover - 运行环境缺少 anthropic 时走兼容降级
+    anthropic = None
+
+
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
 
 
 def enhance_analysis(
@@ -102,6 +113,7 @@ def plan_parking_question(
     question: str,
     schema_text: str,
     glossary_text: str,
+    entity_context: str = "",
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
@@ -112,14 +124,75 @@ def plan_parking_question(
 
     resolved_base_url = (base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
     resolved_model = model or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
-    prompt = _build_parking_planner_prompt(question, schema_text, glossary_text)
+    prompt = build_parking_planner_prompt(question, schema_text, glossary_text, entity_context=entity_context)
     llm_text = _call_openai_compatible(
         prompt=prompt,
         api_key=resolved_api_key,
         base_url=resolved_base_url,
         model=resolved_model,
     )
-    return _parse_planner_json(llm_text)
+    return parse_planner_json(llm_text)
+
+
+def build_default_parking_planner(
+    entity_context: str = "",
+    openai_api_key: str | None = None,
+    openai_base_url: str | None = None,
+    openai_model: str | None = None,
+    anthropic_api_key: str | None = None,
+    anthropic_base_url: str | None = None,
+    anthropic_model: str | None = None,
+):
+    resolved_openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+    if resolved_openai_api_key:
+        resolved_openai_base_url = (openai_base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+        resolved_openai_model = openai_model or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+
+        def openai_planner(question: str, schema_text: str, glossary_text: str) -> dict:
+            prompt = build_parking_planner_prompt(
+                question=question,
+                schema_text=schema_text,
+                glossary_text=glossary_text,
+                entity_context=entity_context,
+            )
+            llm_text = _call_openai_compatible(
+                prompt=prompt,
+                api_key=resolved_openai_api_key,
+                base_url=resolved_openai_base_url,
+                model=resolved_openai_model,
+            )
+            return parse_planner_json(llm_text)
+
+        return openai_planner
+
+    resolved_anthropic_api_key = anthropic_api_key or os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY")
+    if resolved_anthropic_api_key and anthropic is not None:
+        resolved_anthropic_base_url = anthropic_base_url or os.getenv("ANTHROPIC_BASE_URL")
+        resolved_anthropic_model = anthropic_model or os.getenv("ANTHROPIC_MODEL") or "claude-opus-4-6"
+
+        def anthropic_planner(question: str, schema_text: str, glossary_text: str) -> dict:
+            prompt = build_parking_planner_prompt(
+                question=question,
+                schema_text=schema_text,
+                glossary_text=glossary_text,
+                entity_context=entity_context,
+            )
+            client_kwargs = {"api_key": resolved_anthropic_api_key}
+            if resolved_anthropic_base_url:
+                client_kwargs["base_url"] = resolved_anthropic_base_url
+            client = anthropic.Anthropic(**client_kwargs)
+            message = client.messages.create(
+                model=resolved_anthropic_model,
+                max_tokens=1200,
+                system="你是专业的停车经营语义规划器，只输出 JSON。",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text_parts = [block.text for block in message.content if getattr(block, "type", "") == "text"]
+            return parse_planner_json("".join(text_parts).strip())
+
+        return anthropic_planner
+
+    return None
 
 
 def _build_rule_narrative(task: dict, analysis: dict) -> str:
@@ -229,24 +302,28 @@ def _build_analysis_prompt(task: dict, analysis: dict, rule_narrative: str) -> s
     )
 
 
-def _build_parking_planner_prompt(question: str, schema_text: str, glossary_text: str) -> str:
+def build_parking_planner_prompt(question: str, schema_text: str, glossary_text: str, entity_context: str = "") -> str:
     schema_excerpt = "\n".join(line for line in schema_text.splitlines()[:12] if line.strip())
     glossary_excerpt = "\n".join(line for line in glossary_text.splitlines()[:20] if line.strip())
     return (
-        "你是停车经营问数系统的语义规划器。你的任务是把用户问题拆解成稳定的结构化 JSON。"
+        "你是停车经营问数系统的语义规划器。你的任务是先判断问题是否属于停车经营域，再把停车问题拆解成稳定的结构化 JSON。"
         "不要写解释，不要输出 Markdown，只输出一个 JSON 对象。\n\n"
         "要求：\n"
-        "1. domain 固定为 parking_ops。\n"
-        "2. business_goal 只能是以下之一：management_reporting, risk_detection, efficiency_diagnosis, revenue_diagnosis。\n"
-        "3. analysis_job 推荐使用以下之一：operational_overview, period_assessment, anomaly_focus, flow_or_occupancy, revenue_focus。\n"
+        "1. 如果问题明显不是停车经营域，返回 {\"domain\":\"non_parking\"}，不要补充其它停车字段。\n"
+        "2. 如果属于停车经营域，domain 固定为 parking_ops。\n"
+        "3. business_goal 只能是以下之一：management_reporting, risk_detection, efficiency_diagnosis, revenue_diagnosis。\n"
+        "4. analysis_job 推荐使用以下之一：operational_overview, period_assessment, anomaly_focus, flow_or_occupancy, revenue_focus。\n"
+        "5. query_profile 可为：parking_daily_overview_join, payment_passage_reconciliation_by_date, payment_passage_reconciliation_by_plate, lot_capacity_efficiency_ranking, payment_method_risk_breakdown。\n"
+        "6. 支持 sub_questions，用于拆解复合问题。典型 kind 包括：worst_day, reason_explanation, suspected_fare_evasion。\n"
         "4. decision_scope 只能是 executive 或 operations。\n"
-        "5. deliverable 对管理层汇报类可使用 web_report、daily_brief、summary；非报表类可返回 null。\n"
-        "6. time_scope 必须包含 kind, preset, anchor, start, end；kind 可为 preset、specific_month、relative_year_month。"
+        "7. deliverable 对管理层汇报类可使用 web_report、daily_brief、summary；非报表类可返回 null。\n"
+        "8. time_scope 必须包含 kind, preset, anchor, start, end；kind 可为 preset、specific_month、relative_year_month。"
         "如果缺时间范围可返回 preset=all、anchor=null 且 start/end=null。\n"
-        "7. focus_entities 只放车场名；focus_dimensions 建议默认 [\"parking_lot\"]；focus_metrics 只放字段名："
+        "9. focus_entities 只放车场名；允许根据问题中的简称推断为标准车场名；focus_dimensions 建议默认 [\"parking_lot\"]；focus_metrics 只放字段名："
         "total_revenue, entry_count, occupancy_rate, payment_failure_rate, abnormal_open_count, free_release_count。\n"
-        "8. 如果问题缺关键口径，不要自行猜测，在 missing_information 中列出缺失项，例如 [\"time_scope\"]。\n"
-        "9. implicit_requirements 可用于表达 summary_first、actionable_recommendations、comparison_required、reason_explanation 等隐含要求。\n\n"
+        "10. 如果问题缺关键口径，不要自行猜测，在 missing_information 中列出缺失项，例如 [\"time_scope\"]。\n"
+        "11. implicit_requirements 可用于表达 summary_first、actionable_recommendations、comparison_required、reason_explanation 等隐含要求。\n"
+        "12. “没交钱跑了吗/逃费了吗/跑单了吗” 统一理解为 suspected_fare_evasion，只能表示疑似，需要通过对账或异常信号验证，不能直接下结论。\n\n"
         "输出 JSON 模板：\n"
         "{"
         "\"domain\":\"parking_ops\","
@@ -258,16 +335,19 @@ def _build_parking_planner_prompt(question: str, schema_text: str, glossary_text
         "\"focus_entities\":[],"
         "\"focus_dimensions\":[\"parking_lot\"],"
         "\"focus_metrics\":[\"total_revenue\",\"entry_count\",\"occupancy_rate\"],"
+        "\"query_profile\":\"parking_daily_overview_join\","
+        "\"sub_questions\":[{\"kind\":\"worst_day\",\"query_profile\":\"parking_daily_overview_join\"},{\"kind\":\"suspected_fare_evasion\",\"query_profile\":\"payment_passage_reconciliation_by_date\"}],"
         "\"implicit_requirements\":[\"comparison_required\",\"reason_explanation\"],"
         "\"missing_information\":[]"
         "}\n\n"
         f"Schema 摘要：\n{schema_excerpt}\n\n"
         f"术语摘要：\n{glossary_excerpt}\n\n"
+        f"已知车场：\n{entity_context or '未提供'}\n\n"
         f"用户问题：{question}"
     )
 
 
-def _parse_planner_json(llm_text: str) -> dict:
+def parse_planner_json(llm_text: str) -> dict:
     cleaned = llm_text.strip()
     if cleaned.startswith("```"):
         parts = cleaned.split("```")

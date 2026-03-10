@@ -26,10 +26,11 @@ def run_query(
     session_file: str | None = None,
     llm_base_url: str | None = None,
     llm_model: str | None = None,
+    task: dict | None = None,
 ) -> dict:
     schema_text = Path(schema).read_text(encoding="utf-8")
     glossary_text = Path(glossary).read_text(encoding="utf-8")
-    task = normalize_question(
+    resolved_task = task or normalize_question(
         question=question,
         schema_text=schema_text,
         glossary_text=glossary_text,
@@ -41,29 +42,29 @@ def run_query(
     target_dir.mkdir(parents=True, exist_ok=True)
     chart_path = target_dir / "chart.svg"
     summary_path = target_dir / "summary.json"
-    if task.get("needs_clarification"):
+    if resolved_task.get("needs_clarification"):
         payload = {
-            "task": task,
+            "task": resolved_task,
             "needs_clarification": True,
-            "clarifying_question": task["clarifying_question"],
-            "default_time_note": _build_default_time_note(task),
+            "clarifying_question": resolved_task["clarifying_question"],
+            "default_time_note": _build_default_time_note(resolved_task),
         }
         summary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         if session_file:
             _write_session(session_file, payload)
         return payload
 
-    if task["intent"].startswith("parking_") and source_type.lower() == "sqlite":
-        task = _align_parking_sqlite_time_range(task, source)
+    if resolved_task["intent"].startswith("parking_") and source_type.lower() == "sqlite":
+        resolved_task = _align_parking_sqlite_time_range(resolved_task, source)
 
-    rows = load_dataset(source=source, source_type=source_type, task=task)
-    if task["intent"].startswith("parking_") and task.get("query_profile") == "parking_daily_overview_join":
-        task = _align_parking_time_range(task, rows)
+    rows = load_dataset(source=source, source_type=source_type, task=resolved_task)
+    if resolved_task["intent"].startswith("parking_") and resolved_task.get("query_profile") == "parking_daily_overview_join":
+        resolved_task = _align_parking_time_range(resolved_task, rows)
 
-    if task["intent"].startswith("parking_") and task.get("query_profile") == "parking_daily_overview_join":
-        analysis = diagnose_parking_operation(rows, task)
+    if resolved_task["intent"].startswith("parking_") and resolved_task.get("query_profile") == "parking_daily_overview_join":
+        analysis = diagnose_parking_operation(rows, resolved_task)
         narrative = enhance_analysis(
-            task=task,
+            task=resolved_task,
             analysis=analysis,
             enable_llm=enable_llm,
             base_url=llm_base_url,
@@ -79,7 +80,7 @@ def run_query(
         except NotImplementedError:
             pass  # 图表类型暂不支持，跳过渲染，数据结果照常返回
         payload = {
-            "task": task,
+            "task": resolved_task,
             "analysis": {
                 key: value
                 for key, value in analysis.items()
@@ -93,10 +94,10 @@ def run_query(
             },
             # 供 Claude 做追问分析用的原始行样本（最多60行）
             "rows_sample": analysis.get("chart_rows", [])[:60],
-            "default_time_note": _build_default_time_note(task),
+            "default_time_note": _build_default_time_note(resolved_task),
         }
-    elif task["intent"].startswith("parking_"):
-        result = _build_parking_relational_result(task, rows)
+    elif resolved_task["intent"].startswith("parking_"):
+        result = _build_parking_relational_result(resolved_task, rows)
         try:
             render_svg_chart(
                 rows=result["chart_rows"],
@@ -107,12 +108,12 @@ def run_query(
         except NotImplementedError:
             pass
         payload = {
-            "task": task,
+            "task": resolved_task,
             "result": {
                 "row_count": result["row_count"],
                 "rows": result["rows"],
-                "metric": task.get("metric"),
-                "dimensions": task.get("entities", []),
+                "metric": resolved_task.get("metric"),
+                "dimensions": resolved_task.get("entities", []),
             },
             "artifacts": {
                 "summary": str(summary_path),
@@ -120,21 +121,21 @@ def run_query(
             },
             "summary": result["summary"],
             "rows_sample": result["rows"][:60],
-            "default_time_note": _build_default_time_note(task),
+            "default_time_note": _build_default_time_note(resolved_task),
         }
     else:
-        result = execute_structured_task(rows=rows, task=task)
+        result = execute_structured_task(rows=rows, task=resolved_task)
         try:
             render_svg_chart(
                 rows=result["rows"],
-                chart_spec=task["chart"],
+                chart_spec=resolved_task["chart"],
                 output_path=str(chart_path),
                 title="智能问数结果",
             )
         except NotImplementedError:
             pass  # 图表类型暂不支持，跳过渲染，数据结果照常返回
         payload = {
-            "task": task,
+            "task": resolved_task,
             "result": result,
             "artifacts": {
                 "summary": str(summary_path),
@@ -143,7 +144,7 @@ def run_query(
             "summary": build_summary(result),
             # 供 Claude 做追问分析用的原始行样本（最多60行）
             "rows_sample": result.get("rows", [])[:60],
-            "default_time_note": _build_default_time_note(task),
+            "default_time_note": _build_default_time_note(resolved_task),
         }
     summary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     if session_file:
